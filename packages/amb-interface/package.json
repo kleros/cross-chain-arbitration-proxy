@@ -1,0 +1,11 @@
+{
+  "name": "@kleros/xdai-amb-interface",
+  "version": "0.1.0",
+  "description": "xDAI Arbitrary Message Bridge Interface contract",
+  "main": "index.js",
+  "author": "Kleros",
+  "license": "MIT",
+  "files": [
+    "contracts/"
+  ]
+}
