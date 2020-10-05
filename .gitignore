@@ -1,3 +1,6 @@
+# Buidler output
+artifacts/
+cache/
 
 # Created by https://www.toptal.com/developers/gitignore/api/vim,node,visualstudiocode,yarn
 # Edit at https://www.toptal.com/developers/gitignore?templates=vim,node,visualstudiocode,yarn
