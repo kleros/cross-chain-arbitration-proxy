@@ -7,7 +7,7 @@
  *
  * SPDX-License-Identifier: MIT
  */
-pragma solidity ^0.7.1;
+pragma solidity ^0.7.2;
 
 import "@kleros/erc-792/contracts/erc-1497/IEvidence.sol";
 import "./dependencies/IAMB.sol";
