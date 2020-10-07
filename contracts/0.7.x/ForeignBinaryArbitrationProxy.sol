@@ -19,7 +19,35 @@ import "./CrossChainArbitration.sol";
 contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvidence {
     using CappedMath for uint256;
 
-    enum Status {None, Possible, Requested, DepositPending, Ongoing, Ruled, Failed}
+    /**
+     * State chart for Arbitration status.
+     * (I) Means the initial state.
+     * (F) Means a final state.
+     * (F~) Means a conditionally final state.
+     * [x] Means a guard condition.
+     *
+     *                            [Received Disputable]       +---(F~)---+      [Before Deadline]        +-----------+
+     *                                   +------------------->+ Possible +------------------------------>+ Requested |
+     *                                   |                    +----+-----+       Request Dispute         +-----+-----+
+     *                                   |                         ^                                           |
+     * [Received Metadata]        +------+-----+                   | [Received Disputable]                     |
+     *        +------------------>+ Registered |                   |                                           |
+     *        |                   +------------+               +--(F~)--+       [Dispute Failed]               | [Dispute Created]
+     *     +-(I)--+                                            | Failed +<-------------------------------------+
+     *     | None |                                            +--------+                                      v
+     *     +------+                                                                                   +--------+-------+
+     *                                                                                     +----------+ DepositPending |
+     *                                                                                     |          +-----------+----+
+     *                                                                                     |                      |
+     *                                                                                     |                      |
+     *                                                                    [Defendant Paid] |                      | [Defendant did not pay]
+     *                                                                                     |                      |
+     *                                                                                     v                      v
+     *                                                                                 +---------+            +--(F)--+
+     *                                                                                 + Ongoing +------------| Ruled |
+     *                                                                                 +---------+    Rule    +-------+
+     */
+    enum Status {None, Registered, Possible, Requested, DepositPending, Ongoing, Ruled, Failed}
 
     enum Party {None, Defendant, Plaintiff}
 
@@ -83,70 +111,6 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
 
     /// @dev Maps the disputeIDs to arbitrableIDs.
     mapping(uint256 => uint256) public disputeIDToArbitrableID;
-
-    /**
-     * @dev Emitted when an arbitrable item becomes disputable.
-     * @param _arbitrableID The ID of the arbitrable.
-     * @param _defendant The address of the defendant in case there is a dispute.
-     * @param _deadline The absolute time until which the dispute can be created.
-     */
-    event DisputePossible(uint256 indexed _arbitrableID, address indexed _defendant, uint256 _deadline);
-
-    /**
-     * @dev Emitted when a dispute is requested.
-     * @param _arbitrableID The ID of the arbitrable.
-     * @param _plaintiff The address of the plaintiff.
-     */
-    event DisputeRequested(uint256 indexed _arbitrableID, address indexed _plaintiff);
-
-    /**
-     * @dev Emitted when a dispute is accepted by the arbitrable contract on the Home Chain.
-     * @param _arbitrableID The ID of the arbitrable.
-     */
-    event DisputeAccepted(uint256 indexed _arbitrableID);
-
-    /**
-     * @dev Emitted when a dispute is rejected by the arbitrable contract on the Home Chain.
-     * @param _arbitrableID The ID of the arbitrable.
-     */
-    event DisputeRejected(uint256 indexed _arbitrableID);
-
-    /**
-     * @dev Emitted when a dispute creation fails.
-     * @param _arbitrableID The ID of the arbitrable.
-     * @param _arbitrator Arbitrator contract address.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
-     * @param _reason The reason the dispute creation failed.
-     */
-    event DisputeFailed(
-        uint256 indexed _arbitrableID,
-        IArbitrator indexed _arbitrator,
-        bytes _arbitratorExtraData,
-        bytes _reason
-    );
-
-    /**
-     * @dev Emitted when a dispute creation fails.
-     * This event is required to allow detecting the dispute for a given arbitrable was created.
-     * The `Dispute` event from `IEvidence` does not have the proper indexes.
-     * @param _arbitrableID The ID of the arbitrable.
-     * @param _arbitrator Arbitrator contract address.
-     * @param _arbitratorDisputeID ID of the dispute on the Arbitrator contract.
-     */
-    event DisputeOngoing(
-        uint256 indexed _arbitrableID,
-        IArbitrator indexed _arbitrator,
-        uint256 indexed _arbitratorDisputeID
-    );
-
-    /**
-     * @dev Emitted when a dispute is ruled by the arbitrator.
-     * This event is required to allow detecting the dispute for a given arbitrable was ruled.
-     * The `Ruling` event from `IArbitrable` does not have the proper indexes.
-     * @param _arbitrableID The ID of the arbitrable.
-     * @param _ruling The ruling for the arbitration dispute.
-     */
-    event DisputeRuled(uint256 indexed _arbitrableID, uint256 _ruling);
 
     /**
      * @dev Emitted when someone contributes to a dispute or appeal.
@@ -279,6 +243,10 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         string calldata _metaEvidence
     ) external override onlyAmb onlyHomeProxy {
         uint256 arbitrableID = getArbitrableID(_arbitrable, _arbitrableItemID);
+        Arbitration storage arbitration = arbitrations[arbitrableID];
+
+        arbitration.status = Status.Registered;
+
         emit MetaEvidence(arbitrableID, _metaEvidence);
     }
 
@@ -301,11 +269,24 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         uint256 arbitrableID = getArbitrableID(_arbitrable, _arbitrableItemID);
         Arbitration storage arbitration = arbitrations[arbitrableID];
 
+        require(
+            arbitration.status == Status.Registered || arbitration.status == Status.Failed,
+            "Invalid arbitration status"
+        );
+
         arbitration.status = Status.Possible;
         arbitration.possibleUntil = uint40(_deadline);
         arbitration.arbitrable = _arbitrable;
         arbitration.arbitrableItemID = _arbitrableItemID;
         arbitration.arbitratorExtraData = _arbitratorExtraData;
+
+        // Reset fields in case there has been a failed attempt to create a dispute.
+        if (arbitration.status == Status.Failed) {
+            arbitration.plaintiff = address(0);
+            arbitration.arbitrator = IArbitrator(0);
+            arbitration.acceptedAt = 0;
+            arbitration.arbitratorDisputeID = 0;
+        }
 
         emit DisputePossible(arbitrableID, _defendant, _deadline);
     }
@@ -416,25 +397,17 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
             arbitrationCost
         );
 
-        // Notice that if the fee is not fully paid, it means there is no remainder value.
         if (fullyPaid) {
             if (createDispute(_arbitrableID, arbitrationCost)) {
-                // Reimburse the contributor with the remaining value.
-                msg.sender.send(remainder);
-
                 bytes4 methodSelector = IHomeBinaryArbitrationProxy(0).receiveDisputeCreated.selector;
                 bytes memory data = abi.encodeWithSelector(
                     methodSelector,
                     arbitration.arbitrable,
                     arbitration.arbitrableItemID,
-                    arbitrator,
-                    arbitration.arbitratorDisputeID
+                    getDisputeID(arbitration.arbitrator, arbitration.arbitratorDisputeID)
                 );
                 amb.requireToPassMessage(homeProxy, data, amb.maxGasPerTx());
             } else {
-                uint256 amount = registerWithdrawal(arbitration, msg.sender, 0);
-                msg.sender.send(amount); // It is the user responsibility to accept ETH.
-
                 bytes4 methodSelector = IHomeBinaryArbitrationProxy(0).receiveDisputeFailed.selector;
                 bytes memory data = abi.encodeWithSelector(
                     methodSelector,
@@ -443,6 +416,10 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
                 );
                 amb.requireToPassMessage(homeProxy, data, amb.maxGasPerTx());
             }
+
+            // Reimburse the contributor with the remaining value.
+            // Notice that if the fee is not fully paid, it means there is no remainder value.
+            msg.sender.send(remainder);
         }
     }
 
