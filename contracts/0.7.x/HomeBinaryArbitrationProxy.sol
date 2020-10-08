@@ -252,7 +252,7 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
 
         require(arbitrableItem.status == Status.Rejected, "Invalid arbitrable item status");
 
-        arbitrableItem.status == Status.Failed;
+        arbitrableItem.status = Status.Failed;
 
         emit DisputeRejected(_arbitrable, _arbitrableItemID);
 
