@@ -18,31 +18,26 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
      * State chart for AribtrableItem status.
      * (I) Means the initial state.
      * (F) Means a final state.
-     * (F~) Means a conditionally final state.
-     * [x] Means a guard condition.
+     * [condition] Means a guard condition.
      *
-     *                                                                         [Request Rejected]
-     * +----(I)-----+       +------------+       +----(F~)----+       +-----------+    |    +-----(F)----+
-     * |    None    +------>+ Registered +------>+  Possible  +------>+ Requested +----+--->+  Rejected  |
-     * +------------+   |   +-----+------+   |   +-----+------+   |   +-----+-----+    |    +------------+
-     *             Registered     ^   Set Disputable     [Dispute Requested]           |
-     *                            |                                                    | [Request Accepted]
-     *                            |                                                    +----------+
-     *                            |                                                               v
-     *                            |                                                         +-----+------+   [Defendant did not pay]
-     *                            |                                        +----------------+  Accepted  +----------------+
-     *                            |                                        |                +-----+------+                |
-     *                            |                                        |                      |                       |
-     *                            |                                        |                      |                       |
-     *                            |                                        | [Dispute Failed]     | [Defendant paid]      |
-     *                            |                                        |                      |                       |
-     *                            |                                        v                      v                       v
-     *                            |                                  +----(F~)----+         +-----+-----+           +----(F)----+
-     *                            -----------------------------------+   Failed   |         |  Ongoing  +---------->+   Ruled   |
-     *                                   [Item is still disputable]  +------------+         +-----------+     |     +-----------+
-     *                                                                                                [Received Ruling]
+     *      Receive Request     +----------+
+     *    +-------------------->+ Rejected |
+     *    |   [Rejected]        +-----+----+
+     *    |                           |
+     *    |            Relay Rejected |
+     *    |                           |
+     * +-(I)--+                       |    Receive Ruling  +---------+
+     * | None +<----------------------+--------------------+ Ongoing |
+     * +--+---+                       |                    +----+----+
+     *    |                           |                         ^
+     *    |            Receive Ruling | Receive                 |
+     *    |                           | Dispute Failed          |
+     *    |                           |                         | Receive Dispute Created
+     *    | Receive Request     +----------+                    |
+     *    +-------------------->+ Accepted +--------------------+
+     *       [Accepted]         +----------+
      */
-    enum Status {None, Registered, Possible, Requested, Accepted, Ongoing, Failed, Ruled, Rejected}
+    enum Status {None, Rejected, Accepted, Ongoing}
 
     struct ArbitrableItem {
         Status status;
@@ -133,62 +128,57 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     }
 
     /**
-     * @notice Relays the meta evidence to the Foreign Chain.
-     * @dev Should be called by the arbitrable contract when the meta evidence is created.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _metaEvidence The meta evidence.
+     * @notice Registers the dispute params at arbitrable item level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function register(uint256 _arbitrableItemID, string calldata _metaEvidence) external override onlyIfInitialized {
-        ArbitrableItem storage arbitrableItem = arbitrableItems[ICrossChainArbitrable(msg.sender)][_arbitrableItemID];
+    function registerArbitrableContract(string calldata _metaEvidence, bytes calldata _arbitratorExtraData)
+        external
+        override
+    {
+        emit ContractRegistered(ICrossChainArbitrable(msg.sender), _metaEvidence, _arbitratorExtraData);
 
-        require(arbitrableItem.status == Status.None, "arbitrable item status");
-
-        arbitrableItem.status = Status.Registered;
-
-        emit ArbitrableMetaEvidence(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _metaEvidence);
-
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveMetaEvidence.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitrableItemID, _metaEvidence);
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableContract.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _metaEvidence, _arbitratorExtraData);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 
     /**
-     * @notice Relays to the Foreign Chain that an arbitrable item is subject to a dispute.
-     * @dev Should be called by the arbitrable contract when the arbitrable item can be disputed.
+     * @notice Registers the dispute params at arbitrable contract level.
+     * @dev Should be called only by the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _defendant The address of the defendant in case there is a dispute.
-     * @param _deadline The absolute time until which the dispute can be created.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function setDisputable(
+    function registerArbitrableItem(
         uint256 _arbitrableItemID,
-        address _defendant,
-        uint256 _deadline,
+        string calldata _metaEvidence,
         bytes calldata _arbitratorExtraData
     ) external override {
-        ArbitrableItem storage arbitrableItem = arbitrableItems[ICrossChainArbitrable(msg.sender)][_arbitrableItemID];
+        emit ItemRegistered(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _metaEvidence, _arbitratorExtraData);
 
-        require(arbitrableItem.status == Status.Registered, "Invalid arbitrable item status");
-
-        arbitrableItem.status = Status.Possible;
-
-        emit ArbitrableDisputable(
-            ICrossChainArbitrable(msg.sender),
-            _arbitrableItemID,
-            _defendant,
-            _deadline,
-            _arbitratorExtraData
-        );
-
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveDisputable.selector;
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableContract.selector;
         bytes memory data = abi.encodeWithSelector(
             methodSelector,
             msg.sender,
             _arbitrableItemID,
-            _defendant,
-            _deadline,
+            _metaEvidence,
             _arbitratorExtraData
         );
+        amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
+    }
+
+    /**
+     * @notice Sets a given arbitrable item as disputable.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     */
+    function setDisputableItem(uint256 _arbitrableItemID) external override {
+        emit DisputableItem(ICrossChainArbitrable(msg.sender), _arbitrableItemID);
+
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveDisputableItem.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitrableItemID);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 
@@ -206,9 +196,7 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     ) external override onlyAmb onlyForeignProxy {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
-        require(arbitrableItem.status == Status.Possible, "Invalid arbitrable item status");
-
-        emit DisputeRequest(_arbitrable, _arbitrableItemID, _plaintiff);
+        require(arbitrableItem.status == Status.None, "Dispute request already exists");
 
         if (_arbitrable.isDisputable(_arbitrableItemID)) {
             arbitrableItem.status = Status.Accepted;
@@ -216,6 +204,8 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
         } else {
             arbitrableItem.status = Status.Rejected;
         }
+
+        emit DisputeRequest(_arbitrable, _arbitrableItemID, _plaintiff);
     }
 
     /**
@@ -228,12 +218,14 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     function relayDisputeAccepted(ICrossChainArbitrable _arbitrable, uint256 _arbitrableItemID) external override {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
-        require(arbitrableItem.status == Status.Accepted, "Invalid arbitrable item status");
+        require(arbitrableItem.status == Status.Accepted, "Dispute is not accepted");
 
-        emit DisputeAccepted(_arbitrable, _arbitrableItemID);
+        address defendant = _arbitrable.getDefendant(_arbitrableItemID);
+
+        emit DisputeAccepted(_arbitrable, _arbitrableItemID, defendant);
 
         bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveDisputeAccepted.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, address(_arbitrable), _arbitrableItemID);
+        bytes memory data = abi.encodeWithSelector(methodSelector, address(_arbitrable), _arbitrableItemID, defendant);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 
@@ -250,9 +242,9 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     function relayDisputeRejected(ICrossChainArbitrable _arbitrable, uint256 _arbitrableItemID) external override {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
-        require(arbitrableItem.status == Status.Rejected, "Invalid arbitrable item status");
+        require(arbitrableItem.status == Status.Rejected, "Dispute is not rejected");
 
-        arbitrableItem.status = Status.Failed;
+        delete arbitrableItems[_arbitrable][_arbitrableItemID];
 
         emit DisputeRejected(_arbitrable, _arbitrableItemID);
 
@@ -275,14 +267,14 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     ) external override onlyAmb onlyForeignProxy {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
-        require(arbitrableItem.status == Status.Accepted, "Invalid arbitrable item status");
+        require(arbitrableItem.status == Status.Accepted, "Dispute is not accepted");
 
         arbitrableItem.status = Status.Ongoing;
         arbitrableItem.disputeID = _disputeID;
 
-        emit DisputeCreated(_arbitrable, _arbitrableItemID, _disputeID);
-
         _arbitrable.confirmDispute(_arbitrableItemID, _disputeID);
+
+        emit DisputeCreated(_arbitrable, _arbitrableItemID, _disputeID);
     }
 
     /**
@@ -299,19 +291,12 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
-        require(arbitrableItem.status == Status.Accepted, "Invalid arbitrable item status");
+        require(arbitrableItem.status == Status.Accepted, "Dispute is not accepted");
+
+        delete arbitrableItems[_arbitrable][_arbitrableItemID];
+        _arbitrable.cancelDispute(_arbitrableItemID);
 
         emit DisputeFailed(_arbitrable, _arbitrableItemID);
-
-        _arbitrable.cancelDispute(_arbitrableItemID);
-        // `isDisputable` is a view function, so it won't be allowed to re-enter any function that modifies state.
-        if (_arbitrable.isDisputable(_arbitrableItemID)) {
-            // Make it possible to set the item as disputable again if `setDisputable` is called again.
-            arbitrableItem.status = Status.Registered;
-        } else {
-            // Otherwise it has failed for good.
-            arbitrableItem.status = Status.Failed;
-        }
     }
 
     /**
@@ -330,15 +315,13 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
 
         // Allow receiving ruling if the dispute was accepted but not created.
         // This can happen if the defendant fails to fund her side in time.
-        require(
-            arbitrableItem.status == Status.Accepted || arbitrableItem.status == Status.Ongoing,
-            "Invalid arbitrable item status"
-        );
+        require(arbitrableItem.status >= Status.Accepted, "Dispute cannot be ruled");
 
-        arbitrableItem.status = Status.Ruled;
+        uint256 disputeID = arbitrableItem.disputeID;
+        delete arbitrableItems[_arbitrable][_arbitrableItemID];
+
+        _arbitrable.rule(disputeID, _ruling);
 
         emit DisputeRuled(_arbitrable, _arbitrableItemID, _ruling);
-
-        _arbitrable.rule(arbitrableItem.disputeID, _ruling);
     }
 }
