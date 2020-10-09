@@ -23,47 +23,44 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
      * State chart for Arbitration status.
      * (I) Means the initial state.
      * (F) Means a final state.
-     * (F~) Means a conditionally final state.
-     * [x] Means a guard condition.
+     * [condition] Means a guard condition.
      *
-     *                            [Received Disputable]       +---(F~)---+      [Before Deadline]        +-----------+
-     *                                   +------------------->+ Possible +------------------------------>+ Requested |
-     *                                   |                    +----+-----+       Request Dispute         +-----+-----+
-     *                                   |                         ^                                           |
-     * [Received Metadata]        +------+-----+                   | [Received Disputable]                     |
-     *        +------------------>+ Registered |                   |                                           |
-     *        |                   +------------+               +--(F~)--+       [Dispute Failed]               | [Dispute Created]
-     *     +-(I)--+                                            | Failed +<-------------------------------------+
-     *     | None |                                            +--------+                                      v
-     *     +------+                                                                                   +--------+-------+
-     *                                                                                     +----------+ DepositPending |
-     *                                                                                     |          +-----------+----+
-     *                                                                                     |                      |
-     *                                                                                     |                      |
-     *                                                                    [Defendant Paid] |                      | [Defendant did not pay]
-     *                                                                                     |                      |
-     *                                                                                     v                      v
-     *                                                                                 +---------+            +--(F)--+
-     *                                                                                 + Ongoing +------------| Ruled |
-     *                                                                                 +---------+    Rule    +-------+
+     *                                                                                [Defendant did not pay]
+     *                                                                                       |
+     * +-(I)--+   Request Dispute   +-----------+                  +----------------+        |        +--(F)--+
+     * | None +-------------------->+ Requested +----------------->+ DepositPending +---------------->+ Ruled |
+     * +------+    [Registered]     +-----+-----+    [Accepted]    +-------+--------+                 +---+---+
+     *             [Disputable]           |                                |                              ^
+     *                                    |                                |                              |
+     *                                    | [Rejected]                     | [Defendant Paid]             |
+     *                                    |                                |                              | Rule
+     *                                    |                                |                              |
+     *                                    |          +--(F)---+            |          +---------+         |
+     *                                    +--------->+ Failed +<-----------+--------->+ Ongoing +---------+
+     *                                               +--------+      |           |    +---------+
+     *                                                               |           |
+     *                                                   [Dispute Failed]      [Dispute Created]
      */
-    enum Status {None, Registered, Possible, Requested, DepositPending, Ongoing, Ruled, Failed}
+    enum Status {None, Requested, DepositPending, Ongoing, Ruled, Failed}
 
     enum Party {None, Defendant, Plaintiff}
 
     struct Arbitration {
         Status status; // Status of the request.
-        uint40 possibleUntil; // The deadline for creating a dispute.
-        uint40 acceptedAt; // The time when the dispute creation was accepted.
+        uint88 acceptedAt; // The time when the dispute creation was accepted.
         address payable plaintiff; // The address of the plaintiff.
         // All the above fit into a single word (:
         address arbitrable; // The address of the arbitrable contract.
-        uint256 arbitrableItemID; // The ID of the arbitrable item in the contract.
-        bytes arbitratorExtraData; // Extra data for the arbitrator.
+        uint256 arbitrableItemID; // The ID of the arbitration item in the contract.
         IArbitrator arbitrator; // The address of the arbitrator contract.
         uint256 arbitratorDisputeID; // The ID of the dispute in the arbitrator.
         uint256 ruling; // The ruling of the dispute.
         Round[] rounds; // Rounds of the dispute
+    }
+
+    struct DisputeParams {
+        bytes arbitratorExtraData; // Extra data for the arbitrator.
+        string metaEvidence; // The MetaEvidence for the dispute.
     }
 
     struct Round {
@@ -95,7 +92,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     address public homeProxy;
 
     /// @dev The amount of time the defendant side have to deposit the arbitration fee.
-    uint40 public feeDepositTimeout;
+    uint88 public feeDepositTimeout;
 
     /// @dev Multiplier for calculating the appeal fee that must be paid by submitter in the case where there isn't a winner and loser (e.g. when the arbitrator ruled "refuse to arbitrate").
     uint256 public sharedStakeMultiplier;
@@ -106,27 +103,36 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     /// @dev  Multiplier for calculating the appeal fee of the party that lost the previous round.
     uint256 public loserStakeMultiplier;
 
-    /// @dev The arbitrations by arbitrableID.
+    /// @dev Dispute params at contract level
+    mapping(address => DisputeParams) public contractDisputeParams;
+
+    /// @dev Dispute params at arbitrable item level
+    mapping(uint256 => DisputeParams) public itemDisputeParams;
+
+    /// @dev Maps aribtrableID to the disputable state.
+    mapping(uint256 => bool) public disputables;
+
+    /// @dev The arbitrations by arbitrationID.
     mapping(uint256 => Arbitration) public arbitrations;
 
-    /// @dev Maps the disputeIDs to arbitrableIDs.
-    mapping(uint256 => uint256) public disputeIDToArbitrableID;
+    /// @dev Maps the disputeIDs to arbitrationIDs.
+    mapping(uint256 => uint256) public disputeIDToArbitrationID;
 
     /**
      * @dev Emitted when someone contributes to a dispute or appeal.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _party The party which received the contribution.
      * @param _contributor The address of the contributor.
      * @param _amount The amount contributed.
      */
-    event FeeContribution(uint256 indexed _arbitrableID, Party _party, address indexed _contributor, uint256 _amount);
+    event FeeContribution(uint256 indexed _arbitrationID, Party _party, address indexed _contributor, uint256 _amount);
 
     /**
      * @dev Emitted when someone pays for the full dispute or appeal fee.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _party The party which received the contribution.
      */
-    event FeePaid(uint256 indexed _arbitrableID, Party _party);
+    event FeePaid(uint256 indexed _arbitrationID, Party _party);
 
     modifier onlyGovernor() {
         require(msg.sender == governor, "Only governor allowed");
@@ -153,7 +159,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     constructor(
         IAMB _amb,
         IArbitrator _arbitrator,
-        uint40 _feeDepositTimeout,
+        uint88 _feeDepositTimeout,
         uint256 _sharedStakeMultiplier,
         uint256 _winnerStakeMultiplier,
         uint256 _loserStakeMultiplier
@@ -202,7 +208,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
      * @notice Sets the amount of time the defendant has to deposit the arbitration fee.
      * @param _feeDepositTimeout The amount of time (seconds) to deposit.
      */
-    function changeFeeDepositTimeout(uint40 _feeDepositTimeout) external onlyGovernor {
+    function changeFeeDepositTimeout(uint88 _feeDepositTimeout) external onlyGovernor {
         feeDepositTimeout = _feeDepositTimeout;
     }
 
@@ -231,90 +237,97 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     }
 
     /**
-     * @notice Receives the meta evidence from the Home Chain.
-     * @dev Should only be called by the xDAI/ETH bridge.
-     * @param _arbitrable The address of the arbitrable contract on the Home Chain.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _metaEvidence The meta evidence.
+     * @notice Receives the dispute params for an arbitrable contract.
+     * @dev Should only be called by the xDAI/ETH bridge at most once per contract.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function receiveMetaEvidence(
+    function receiveArbitrableContract(
         address _arbitrable,
-        uint256 _arbitrableItemID,
-        string calldata _metaEvidence
+        string calldata _metaEvidence,
+        bytes calldata _arbitratorExtraData
     ) external override onlyAmb onlyHomeProxy {
-        uint256 arbitrableID = getArbitrableID(_arbitrable, _arbitrableItemID);
-        Arbitration storage arbitration = arbitrations[arbitrableID];
+        DisputeParams storage params = contractDisputeParams[_arbitrable];
 
-        arbitration.status = Status.Registered;
+        require(params.arbitratorExtraData.length == 0, "Contract already registered");
 
-        emit MetaEvidence(arbitrableID, _metaEvidence);
+        params.metaEvidence = _metaEvidence;
+        params.arbitratorExtraData = _arbitratorExtraData;
+
+        emit ContractReceived(_arbitrable, _metaEvidence, _arbitratorExtraData);
     }
 
     /**
-     * @notice Receives from the Home Chain that an arbitrable item is subject to a dispute.
-     * @dev Should only be called by the xDAI/ETH bridge.
-     * @param _arbitrable The address of the arbitrable contract on the Home Chain.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _defendant The address of the defendant in case there is a dispute.
-     * @param _deadline The absolute time until which the dispute can be created.
+     * @notice Receives the dispute params for an arbitrable item.
+     * @dev Should only be called by the xDAI/ETH bridge at most once per item.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function receiveDisputable(
+    function receiveArbitrableItem(
         address _arbitrable,
         uint256 _arbitrableItemID,
-        address _defendant,
-        uint256 _deadline,
+        string calldata _metaEvidence,
         bytes calldata _arbitratorExtraData
     ) external override onlyAmb onlyHomeProxy {
-        uint256 arbitrableID = getArbitrableID(_arbitrable, _arbitrableItemID);
-        Arbitration storage arbitration = arbitrations[arbitrableID];
+        uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
+        DisputeParams storage params = itemDisputeParams[arbitrationID];
 
-        require(
-            arbitration.status == Status.Registered || arbitration.status == Status.Failed,
-            "Invalid arbitration status"
-        );
+        require(params.arbitratorExtraData.length == 0, "Item already registered");
 
-        arbitration.status = Status.Possible;
-        arbitration.possibleUntil = uint40(_deadline);
-        arbitration.arbitrable = _arbitrable;
-        arbitration.arbitrableItemID = _arbitrableItemID;
-        arbitration.arbitratorExtraData = _arbitratorExtraData;
+        params.metaEvidence = _metaEvidence;
+        params.arbitratorExtraData = _arbitratorExtraData;
 
-        // Reset fields in case there has been a failed attempt to create a dispute.
-        if (arbitration.status == Status.Failed) {
-            arbitration.plaintiff = address(0);
-            arbitration.arbitrator = IArbitrator(0);
-            arbitration.acceptedAt = 0;
-            arbitration.arbitratorDisputeID = 0;
-        }
+        emit ItemReceived(arbitrationID, _metaEvidence, _arbitratorExtraData);
+    }
 
-        emit DisputePossible(arbitrableID, _defendant, _deadline);
+    /**
+     * @notice Receives an arbitrable item marked as disputable.
+     * @dev Should only be called by the xDAI/ETH bridge.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     */
+    function receiveDisputableItem(address _arbitrable, uint256 _arbitrableItemID)
+        external
+        override
+        onlyAmb
+        onlyHomeProxy
+    {
+        uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
+
+        disputables[arbitrationID] = true;
+
+        emit DisputableItemReceived(arbitrationID);
     }
 
     /**
      * @notice Requests the creation of a dispute for an arbitrable item.
-     * @dev Can be called by any 3rd-party.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
-    function requestDispute(uint256 _arbitrableID) external payable {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+    function requestDispute(address _arbitrable, uint256 _arbitrableItemID) external payable {
+        uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
+        Arbitration storage arbitration = arbitrations[arbitrationID];
+        (bytes storage arbitratorExtraData, ) = getDisputeParams(arbitrationID, arbitration.arbitrable);
+        uint256 arbitrationCost = arbitrator.arbitrationCost(arbitratorExtraData);
 
-        require(arbitration.status == Status.Possible, "Invalid arbitration status");
-        require(arbitration.possibleUntil >= block.timestamp, "Deadline for request has expired");
-
-        uint256 arbitrationCost = arbitrator.arbitrationCost(arbitration.arbitratorExtraData);
-
+        require(disputables[arbitrationID], "Arbitrable is not disputable");
+        require(arbitration.status == Status.None, "Dispute already requested");
         require(msg.value >= arbitrationCost, "Deposit value too low");
 
+        arbitration.arbitrable = _arbitrable;
+        arbitration.arbitrableItemID = _arbitrableItemID;
         arbitration.status = Status.Requested;
         arbitration.plaintiff = msg.sender;
         arbitration.rounds.push();
 
-        (uint256 remainder, ) = contribute(_arbitrableID, Party.Plaintiff, msg.sender, msg.value, arbitrationCost);
+        (uint256 remainder, ) = contribute(arbitrationID, Party.Plaintiff, msg.sender, msg.value, arbitrationCost);
 
         msg.sender.send(remainder);
 
-        emit DisputeRequested(_arbitrableID, msg.sender);
+        emit DisputeRequested(arbitrationID, msg.sender);
 
         bytes4 methodSelector = IHomeBinaryArbitrationProxy(0).receiveDisputeRequest.selector;
         bytes memory data = abi.encodeWithSelector(
@@ -330,30 +343,30 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
      * @notice Receives from the Home Chain that the dispute has been accepted.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _defendant The address of the defendant party.
      */
-    function receiveDisputeAccepted(address _arbitrable, uint256 _arbitrableItemID)
-        external
-        override
-        onlyAmb
-        onlyHomeProxy
-    {
-        uint256 arbitrableID = getArbitrableID(_arbitrable, _arbitrableItemID);
-        Arbitration storage arbitration = arbitrations[arbitrableID];
+    function receiveDisputeAccepted(
+        address _arbitrable,
+        uint256 _arbitrableItemID,
+        address _defendant
+    ) external override onlyAmb onlyHomeProxy {
+        uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
+        Arbitration storage arbitration = arbitrations[arbitrationID];
 
         require(arbitration.status == Status.Requested, "Invalid arbitration status");
 
         arbitration.status = Status.DepositPending;
-        arbitration.acceptedAt = uint40(block.timestamp);
+        arbitration.acceptedAt = uint88(block.timestamp);
 
-        emit DisputeAccepted(arbitrableID);
+        emit DisputeAccepted(arbitrationID, _defendant);
     }
 
     /**
      * @notice Receives from the Home Chain that the dispute has been rejected.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
     function receiveDisputeRejected(address _arbitrable, uint256 _arbitrableItemID)
         external
@@ -361,36 +374,40 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         onlyAmb
         onlyHomeProxy
     {
-        uint256 arbitrableID = getArbitrableID(_arbitrable, _arbitrableItemID);
-        Arbitration storage arbitration = arbitrations[arbitrableID];
+        uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
+        Arbitration storage arbitration = arbitrations[arbitrationID];
 
         require(arbitration.status == Status.Requested, "Invalid arbitration status");
 
-        arbitration.status = Status.Failed;
-
-        // Reimburses the plaintiff.
         uint256 amount = registerWithdrawal(arbitration, arbitration.plaintiff, 0);
+        // Reimburses the plaintiff.
         arbitration.plaintiff.send(amount); // It is the user responsibility to accept ETH.
 
-        emit DisputeRejected(arbitrableID);
+        arbitration.status = Status.Failed;
+
+        emit DisputeRejected(arbitrationID);
     }
 
     /**
      * @notice Funds the defendant side of the dispute after it has been accepted.
      * @dev We require both sides to pay the full arbitration cost, so the winner can be refunded after.
-     * The plaintiff already paid for their part when requested the dispute.
-     * @param _arbitrableID The ID of the arbitrable.
+     * The plaintiff already paid it when the dispute was requested.
+     * @param _arbitrationID The ID of the arbitration.
      */
-    function fundDisputeDefendant(uint256 _arbitrableID) external payable {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+    function fundDisputeDefendant(uint256 _arbitrationID) external payable {
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
+        (bytes storage arbitratorExtraData, string storage metaEvidence) = getDisputeParams(
+            _arbitrationID,
+            arbitration.arbitrable
+        );
 
         require(arbitration.status == Status.DepositPending, "Invalid arbitration status");
         require(block.timestamp <= arbitration.acceptedAt + feeDepositTimeout, "Deadline for deposit has expired");
 
-        uint256 arbitrationCost = arbitrator.arbitrationCost(arbitration.arbitratorExtraData);
+        uint256 arbitrationCost = arbitrator.arbitrationCost(arbitratorExtraData);
 
         (uint256 remainder, bool fullyPaid) = contribute(
-            _arbitrableID,
+            _arbitrationID,
             Party.Defendant,
             msg.sender,
             msg.value,
@@ -398,7 +415,9 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         );
 
         if (fullyPaid) {
-            if (createDispute(_arbitrableID, arbitrationCost)) {
+            emit MetaEvidence(_arbitrationID, metaEvidence);
+
+            if (createDispute(_arbitrationID, arbitrationCost, arbitratorExtraData)) {
                 bytes4 methodSelector = IHomeBinaryArbitrationProxy(0).receiveDisputeCreated.selector;
                 bytes memory data = abi.encodeWithSelector(
                     methodSelector,
@@ -424,15 +443,56 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     }
 
     /**
+     * @notice Creates a dispute in the arbitrator.
+     * @param _arbitrationID The already calculated arbitrable ID to save up some gas.
+     * @param _arbitrationCost The cost of arbitration.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     * @return Whether the dispute creation succeeded or not.
+     */
+    function createDispute(
+        uint256 _arbitrationID,
+        uint256 _arbitrationCost,
+        bytes storage _arbitratorExtraData
+    ) internal returns (bool) {
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
+
+        try arbitrator.createDispute{value: _arbitrationCost}(NUMBER_OF_CHOICES, _arbitratorExtraData) returns (
+            uint256 arbitratorDisputeID
+        ) {
+            uint256 disputeID = getDisputeID(arbitrator, arbitratorDisputeID);
+
+            arbitration.status = Status.Ongoing;
+            arbitration.arbitrator = arbitrator;
+            arbitration.arbitratorDisputeID = arbitratorDisputeID;
+            // Create a new round for a possible appeal.
+            arbitration.rounds.push();
+
+            disputeIDToArbitrationID[disputeID] = _arbitrationID;
+
+            emit Dispute(arbitrator, arbitratorDisputeID, _arbitrationID, _arbitrationID);
+            emit DisputeOngoing(_arbitrationID, arbitrator, arbitratorDisputeID);
+
+            return true;
+        } catch (bytes memory reason) {
+            arbitration.status = Status.Failed;
+
+            emit DisputeFailed(_arbitrationID, arbitrator, _arbitratorExtraData, reason);
+
+            return false;
+        }
+    }
+
+    /**
      * @notice Reimburses the rest.
      * @dev Takes up to the total amount required to fund a side of an appeal.
      * If users send more than required, they will be reimbursed of the remaining.
      * Creates an appeal if both sides are fully funded.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _party The party that pays the appeal fee.
      */
-    function fundAppeal(uint256 _arbitrableID, Party _party) external payable {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+    function fundAppeal(uint256 _arbitrationID, Party _party) external payable {
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
+        (bytes storage arbitratorExtraData, ) = getDisputeParams(_arbitrationID, arbitration.arbitrable);
 
         require(_party == Party.Defendant || _party == Party.Plaintiff, "Invalid side");
         require(arbitration.status == Status.Ongoing, "Invalid arbitration status");
@@ -440,10 +500,10 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         Round storage round = arbitration.rounds[arbitration.rounds.length - 1];
         require(!round.fullyPaid[uint256(_party)], "Appeal fee already paid");
 
-        (uint256 appealCost, uint256 totalCost) = getAppealFeeComponents(arbitration, _party);
+        (uint256 appealCost, uint256 totalCost) = getAppealFeeComponents(arbitration, _party, arbitratorExtraData);
 
         (uint256 remainder, ) = contribute(
-            _arbitrableID,
+            _arbitrationID,
             _party,
             msg.sender,
             msg.value,
@@ -455,54 +515,10 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
             arbitration.rounds.push();
 
             // The appeal must happen on the same arbitrator the original dispute was created.
-            arbitration.arbitrator.appeal{value: appealCost}(
-                arbitration.arbitratorDisputeID,
-                arbitration.arbitratorExtraData
-            );
+            arbitration.arbitrator.appeal{value: appealCost}(arbitration.arbitratorDisputeID, arbitratorExtraData);
         }
 
         msg.sender.send(remainder);
-    }
-
-    /**
-     * @notice Calculates the appeal fee and total cost for an arbitration.
-     * @dev This function was extracted from `fundAppeal` because of the stack depth problem.
-     * @param _arbitration The arbitration object.
-     * @param _party The party appealing.
-     * @return appealCost The actual appeal cost.
-     * @return totalCost The total cost for the appeal
-     */
-    function getAppealFeeComponents(Arbitration storage _arbitration, Party _party)
-        internal
-        view
-        returns (uint256 appealCost, uint256 totalCost)
-    {
-        (uint256 appealPeriodStart, uint256 appealPeriodEnd) = _arbitration.arbitrator.appealPeriod(
-            _arbitration.arbitratorDisputeID
-        );
-        require(block.timestamp >= appealPeriodStart && block.timestamp < appealPeriodEnd, "Appeal period is over");
-
-        uint256 winner = _arbitration.arbitrator.currentRuling(_arbitration.arbitratorDisputeID);
-        uint256 multiplier;
-        if (winner == 0) {
-            multiplier = sharedStakeMultiplier;
-        } else if (winner == uint256(_party)) {
-            multiplier = winnerStakeMultiplier;
-        } else {
-            require(
-                block.timestamp - appealPeriodStart < (appealPeriodEnd - appealPeriodStart) / 2,
-                "Loser party deadline is over"
-            );
-            multiplier = loserStakeMultiplier;
-        }
-
-        uint256 appealCost = _arbitration.arbitrator.appealCost(
-            _arbitration.arbitratorDisputeID,
-            _arbitration.arbitratorExtraData
-        );
-        uint256 totalCost = appealCost.addCap((appealCost.mulCap(multiplier)) / MULTIPLIER_DIVISOR);
-
-        return (appealCost, totalCost);
     }
 
     /**
@@ -513,8 +529,8 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
      */
     function rule(uint256 _arbitratorDisputeID, uint256 _ruling) external override {
         uint256 disputeID = getDisputeID(IArbitrator(msg.sender), _arbitratorDisputeID);
-        uint256 arbitrableID = disputeIDToArbitrableID[disputeID];
-        Arbitration storage arbitration = arbitrations[arbitrableID];
+        uint256 arbitrationID = disputeIDToArbitrationID[disputeID];
+        Arbitration storage arbitration = arbitrations[arbitrationID];
 
         require(address(arbitration.arbitrator) == msg.sender, "Only dispute arbitrator allowed");
         require(arbitration.status == Status.Ongoing, "Invalid arbitration status");
@@ -537,7 +553,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         }
 
         emit Ruling(arbitration.arbitrator, _arbitratorDisputeID, arbitration.ruling);
-        emit DisputeRuled(arbitrableID, arbitration.ruling);
+        emit DisputeRuled(arbitrationID, arbitration.ruling);
 
         bytes4 methodSelector = IHomeBinaryArbitrationProxy(0).receiveRuling.selector;
         bytes memory data = abi.encodeWithSelector(
@@ -553,10 +569,10 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
      * @notice Claims the win in favor of the plaintiff when the defendant side fails to fund her side of the dispute.
      * @dev We require both sides to pay the full arbitration cost, so the winner can be refunded after.
      * The plaintiff already paid for their part when requested the dispute.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      */
-    function claimPlaintiffWin(uint256 _arbitrableID) external {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+    function claimPlaintiffWin(uint256 _arbitrationID) external {
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
 
         require(arbitration.status == Status.DepositPending, "Invalid arbitration status");
         require(block.timestamp > arbitration.acceptedAt + feeDepositTimeout, "Defendant deposit still possible");
@@ -567,7 +583,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         uint256 amount = registerWithdrawal(arbitration, arbitration.plaintiff, 0);
         arbitration.plaintiff.send(amount); // It is the user responsibility to accept ETH.
 
-        emit DisputeRuled(_arbitrableID, arbitration.ruling);
+        emit DisputeRuled(_arbitrationID, arbitration.ruling);
 
         bytes4 methodSelector = IHomeBinaryArbitrationProxy(0).receiveRuling.selector;
         bytes memory data = abi.encodeWithSelector(
@@ -582,17 +598,17 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     /**
      * @dev Withdraws contributions of multiple appeal rounds at once.
      * @notice This function is O(n) where n is the number of rounds. This could exceed the gas limit, therefore this function should be used only as a utility and not be relied upon by other contracts.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _cursor The round from where to start withdrawing.
      * @param _count The number of rounds to iterate. If set to 0 or a value larger than the number of rounds, iterates until the last round.
      */
     function batchWithdrawFeesAndRewards(
-        uint256 _arbitrableID,
+        uint256 _arbitrationID,
         address payable _beneficiary,
         uint256 _cursor,
         uint256 _count
     ) external {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
 
         require(arbitration.status >= Status.Ruled, "The arbitration is not settled.");
 
@@ -607,17 +623,17 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     /**
      * @dev Withdraws contributions of a specific appeal round.
      * @notice Reimburses contributions if no appeals were raised; otherwise sends the fee stake rewards and reimbursements proportional to the contributions made to the winner of a dispute.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _beneficiary The address that made contributions.
      * @param _roundNumber The round from which to withdraw.
      * @return amount The withdrawn amount.
      */
     function withdrawFeesAndRewards(
-        uint256 _arbitrableID,
+        uint256 _arbitrationID,
         address payable _beneficiary,
         uint256 _roundNumber
     ) external returns (uint256 amount) {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
 
         require(arbitration.status >= Status.Ruled, "The arbitration is not settled.");
 
@@ -628,14 +644,14 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
 
     /**
      * @notice Returns the arbitration cost for a given arbitrable item.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @return The dispute fee.
      */
-    function getDisputeFee(uint256 _arbitrableID) external view returns (uint256) {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
-
-        if (arbitration.status >= Status.Possible && arbitration.status <= Status.DepositPending) {
-            return arbitrator.arbitrationCost(arbitration.arbitratorExtraData);
+    function getDisputeFee(uint256 _arbitrationID) external view returns (uint256) {
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
+        (bytes storage arbitratorExtraData, ) = getDisputeParams(_arbitrationID, arbitration.arbitrable);
+        if (arbitration.status <= Status.DepositPending) {
+            return arbitrator.arbitrationCost(arbitratorExtraData);
         } else {
             return NON_PAYABLE_VALUE;
         }
@@ -643,12 +659,13 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
 
     /**
      * @notice Returns the appeal cost for a given arbitrable item.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _party The party to get the appeal fee for.
      * @return The appeal fee.
      */
-    function getAppealFee(uint256 _arbitrableID, Party _party) external view returns (uint256) {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+    function getAppealFee(uint256 _arbitrationID, Party _party) external view returns (uint256) {
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
+        (bytes storage arbitratorExtraData, ) = getDisputeParams(_arbitrationID, arbitration.arbitrable);
 
         (uint256 appealPeriodStart, uint256 appealPeriodEnd) = arbitration.arbitrator.appealPeriod(
             arbitration.arbitratorDisputeID
@@ -669,33 +686,30 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
             multiplier = loserStakeMultiplier;
         }
 
-        uint256 appealCost = arbitration.arbitrator.appealCost(
-            arbitration.arbitratorDisputeID,
-            arbitration.arbitratorExtraData
-        );
+        uint256 appealCost = arbitration.arbitrator.appealCost(arbitration.arbitratorDisputeID, arbitratorExtraData);
 
         return appealCost.addCap((appealCost.mulCap(multiplier)) / MULTIPLIER_DIVISOR);
     }
 
     /**
      * @dev Gets the number of rounds of arbitration.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @return The number of rounds.
      */
-    function getNumberOfRounds(uint256 _arbitrableID) external view returns (uint256) {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+    function getNumberOfRounds(uint256 _arbitrationID) external view returns (uint256) {
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
 
         return arbitration.rounds.length;
     }
 
     /**
      * @notice Gets the information of a round of an arbitration.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @return paidFees The amount of fees paid by each side.
      * @return fullyPaid Whether each side has paid all the required appeal fees or not.
      * @return feeRewards The total amount of appeal fees to be used as crowdfunding rewards.
      */
-    function getRoundInfo(uint256 _arbitrableID, uint256 _roundNumber)
+    function getRoundInfo(uint256 _arbitrationID, uint256 _roundNumber)
         external
         view
         returns (
@@ -704,7 +718,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
             uint256 feeRewards
         )
     {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
         Round storage round = arbitration.rounds[_roundNumber];
 
         return (round.paidFees, round.fullyPaid, round.feeRewards);
@@ -712,33 +726,33 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
 
     /**
      * @dev Gets the contributions made by a party for a given round of task appeal.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _contributor The address of the contributor.
      * @param _roundNumber The position of the round.
      * @return The contributions.
      */
     function getContributions(
-        uint256 _arbitrableID,
+        uint256 _arbitrationID,
         address _contributor,
         uint256 _roundNumber
     ) external view returns (uint256[3] memory) {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
 
         return arbitration.rounds[_roundNumber].contributions[_contributor];
     }
 
     /**
      * @notice Returns the sum of withdrawable wei from appeal rounds. This function is O(n), where n is the number of rounds of the task. This could exceed the gas limit, therefore this function should only be used for interface display and not by other contracts.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _beneficiary The contributor for which to query.
      * @return total The total amount of wei available to withdraw.
      */
-    function getTotalWithdrawableAmount(uint256 _arbitrableID, address _beneficiary)
+    function getTotalWithdrawableAmount(uint256 _arbitrationID, address _beneficiary)
         external
         view
         returns (uint256 total)
     {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
 
         // Only Ruled and Failed arbitrations are withdrawable.
         if (arbitration.status < Status.Ruled) {
@@ -753,43 +767,8 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     }
 
     /**
-     * @notice Creates a dispute in the arbitrator.
-     * @param _arbitrableID The already calculated arbitrable ID to save up some gas.
-     * @param _arbitrationCost The cost of arbitration.
-     * @return Whether the dispute creation succeeded or not.
-     */
-    function createDispute(uint256 _arbitrableID, uint256 _arbitrationCost) internal returns (bool) {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
-
-        try
-            arbitrator.createDispute{value: _arbitrationCost}(NUMBER_OF_CHOICES, arbitration.arbitratorExtraData)
-        returns (uint256 arbitratorDisputeID) {
-            uint256 disputeID = getDisputeID(arbitrator, arbitratorDisputeID);
-
-            arbitration.status = Status.Ongoing;
-            arbitration.arbitrator = arbitrator;
-            arbitration.arbitratorDisputeID = arbitratorDisputeID;
-            // Create a new round for a possible appeal.
-            arbitration.rounds.push();
-
-            disputeIDToArbitrableID[disputeID] = _arbitrableID;
-
-            emit Dispute(arbitrator, arbitratorDisputeID, _arbitrableID, _arbitrableID);
-            emit DisputeOngoing(_arbitrableID, arbitrator, arbitratorDisputeID);
-
-            return true;
-        } catch (bytes memory reason) {
-            arbitration.status = Status.Failed;
-
-            emit DisputeFailed(_arbitrableID, arbitrator, arbitration.arbitratorExtraData, reason);
-
-            return false;
-        }
-    }
-
-    /**
      * @notice Makes a fee contribution to the current round.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _party The party which to contribute.
      * @param _contributor The address of the contributor.
      * @param _availableAmount The amount the contributor has sent.
@@ -798,16 +777,17 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
      * @return fullyPaid Whether or not the contribution is enough to cover the total required.
      */
     function contribute(
-        uint256 _arbitrableID,
+        uint256 _arbitrationID,
         Party _party,
         address _contributor,
         uint256 _availableAmount,
         uint256 _totalRequired
     ) internal returns (uint256 remainder, bool fullyPaid) {
-        Arbitration storage arbitration = arbitrations[_arbitrableID];
+        Arbitration storage arbitration = arbitrations[_arbitrationID];
         Round storage round = arbitration.rounds[arbitration.rounds.length - 1];
 
-        (uint256 contribution, uint256 remainder) = calculateContribution(
+        uint256 contribution;
+        (contribution, remainder) = calculateContribution(
             _availableAmount,
             _totalRequired.subCap(round.paidFees[uint256(_party)])
         );
@@ -816,12 +796,12 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         round.paidFees[uint256(_party)] += contribution;
         round.contributions[_contributor][uint256(_party)] += contribution;
 
-        emit FeeContribution(_arbitrableID, _party, _contributor, contribution);
+        emit FeeContribution(_arbitrationID, _party, _contributor, contribution);
 
         if (round.paidFees[uint256(_party)] >= _totalRequired) {
             round.fullyPaid[uint256(_party)] = true;
 
-            emit FeePaid(_arbitrableID, _party);
+            emit FeePaid(_arbitrationID, _party);
         }
 
         return (remainder, round.fullyPaid[uint256(_party)]);
@@ -846,6 +826,66 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
 
         remainder = _available - _requiredAmount;
         return (_requiredAmount, remainder);
+    }
+
+    /**
+     * @notice Gets the dispute params for a given arbitrable item.
+     * @dev If a contract registered both params at contract and item level, the one at item level taks precedence.
+     * @param _arbitrationID The ID of the arbitration item.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @return arbitratorExtraData The extra data for the arbitrator.
+     * @return metaEvidence The meta evidence for the item.
+     */
+    function getDisputeParams(uint256 _arbitrationID, address _arbitrable)
+        internal
+        view
+        returns (bytes storage arbitratorExtraData, string storage metaEvidence)
+    {
+        DisputeParams storage forItem = itemDisputeParams[_arbitrationID];
+        DisputeParams storage forContract = contractDisputeParams[_arbitrable];
+
+        arbitratorExtraData = forItem.arbitratorExtraData.length > 0
+            ? forItem.arbitratorExtraData
+            : forContract.arbitratorExtraData;
+
+        metaEvidence = bytes(forItem.metaEvidence).length > 0 ? forItem.metaEvidence : forContract.metaEvidence;
+
+        require(arbitratorExtraData.length > 0 && bytes(metaEvidence).length > 0, "Dispute params not registered");
+    }
+
+    /**
+     * @notice Calculates the appeal fee and total cost for an arbitration.
+     * @dev This function was extracted from `fundAppeal` because of the stack depth problem.
+     * @param _arbitration The arbitration object.
+     * @param _party The party appealing.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     * @return appealCost The actual appeal cost.  @return totalCost The total cost for the appeal. */
+    function getAppealFeeComponents(
+        Arbitration storage _arbitration,
+        Party _party,
+        bytes storage _arbitratorExtraData
+    ) internal view returns (uint256 appealCost, uint256 totalCost) {
+        (uint256 appealPeriodStart, uint256 appealPeriodEnd) = _arbitration.arbitrator.appealPeriod(
+            _arbitration.arbitratorDisputeID
+        );
+        require(block.timestamp >= appealPeriodStart && block.timestamp < appealPeriodEnd, "Appeal period is over");
+
+        uint256 winner = _arbitration.arbitrator.currentRuling(_arbitration.arbitratorDisputeID);
+        uint256 multiplier;
+        if (winner == 0) {
+            multiplier = sharedStakeMultiplier;
+        } else if (winner == uint256(_party)) {
+            multiplier = winnerStakeMultiplier;
+        } else {
+            require(
+                block.timestamp - appealPeriodStart < (appealPeriodEnd - appealPeriodStart) / 2,
+                "Loser party deadline is over"
+            );
+            multiplier = loserStakeMultiplier;
+        }
+
+        appealCost = _arbitration.arbitrator.appealCost(_arbitration.arbitratorDisputeID, _arbitratorExtraData);
+        totalCost = appealCost.addCap((appealCost.mulCap(multiplier)) / MULTIPLIER_DIVISOR);
     }
 
     /**
@@ -913,9 +953,9 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     /**
      * @dev Turns the address of the arbitrable contract and the ID of the arbitrable item into an identifier.
      * @param _arbitrable The arbitrable contract address.
-     * @param _arbitrableItemID The ID of the arbitrable item.
+     * @param _arbitrableItemID The ID of the arbitration item.
      */
-    function getArbitrableID(address _arbitrable, uint256 _arbitrableItemID) public pure returns (uint256) {
+    function getArbitrationID(address _arbitrable, uint256 _arbitrableItemID) public pure returns (uint256) {
         return uint256(keccak256(abi.encodePacked(_arbitrable, _arbitrableItemID)));
     }
 

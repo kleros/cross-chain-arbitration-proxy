@@ -9,30 +9,37 @@ import "@kleros/erc-792/contracts/IArbitrable.sol";
 interface ICrossChainArbitrable is IArbitrable {
     /**
      * @notice Notifies that a dispute has been requested for an arbitrable item.
-     * @param _arbitrableItemID The ID of the arbitrable item.
+     * @param _arbitrableItemID The ID of the arbitration item.
      * @param _plaintiff The address of the dispute requester.
      */
     function notifyDisputeRequest(uint256 _arbitrableItemID, address _plaintiff) external;
 
     /**
      * @notice Cancels a dispute previously requested for an arbitrable item.
-     * @param _arbitrableItemID The ID of the arbitrable item.
+     * @param _arbitrableItemID The ID of the arbitration item.
      */
     function cancelDispute(uint256 _arbitrableItemID) external;
 
     /**
      * @notice Confirms the dispute was created.
-     * @param _arbitrableItemID The ID of the arbitrable item.
+     * @param _arbitrableItemID The ID of the arbitration item.
      * @param _disputeID The ID of the dispute.
      */
     function confirmDispute(uint256 _arbitrableItemID, uint256 _disputeID) external;
 
     /**
      * @notice Returns whether an arbitrable item is subject to a dispute or not.
-     * @param _arbitrableItemID The ID of the arbitrable item.
+     * @param _arbitrableItemID The ID of the arbitration item.
      * @return The disputability status.
      */
     function isDisputable(uint256 _arbitrableItemID) external view returns (bool);
+
+    /**
+     * @notice Returns the defendant party for a dispute.
+     * @param _arbitrableItemID The ID of the arbitration item.
+     * @return The address of the defendant party.
+     */
+    function getDefendant(uint256 _arbitrableItemID) external view returns (address);
 }
 
 /**
@@ -40,37 +47,42 @@ interface ICrossChainArbitrable is IArbitrable {
  */
 interface IHomeBinaryArbitrationProxy {
     /**
-     * @dev Emitted when the MetaEvidence for an arbitrable item is emitted.
+     * @dev Emitted when an arbitrable contract is registered.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _metaEvidence The meta evidence.
-     */
-    event ArbitrableMetaEvidence(
-        ICrossChainArbitrable indexed _arbitrable,
-        uint256 indexed _arbitrableItemID,
-        string _metaEvidence
-    );
-
-    /**
-     * @dev Emitted when an arbitrable item becomes disputable.
-     * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _defendant The address of the defendant in case there is a dispute.
-     * @param _deadline The absolute time until which the dispute can be created.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    event ArbitrableDisputable(
+    event ContractRegistered(
         ICrossChainArbitrable indexed _arbitrable,
-        uint256 indexed _arbitrableItemID,
-        address indexed _defendant,
-        uint256 _deadline,
+        string _metaEvidence,
         bytes _arbitratorExtraData
     );
 
     /**
+     * @dev Emitted when an item is registered.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    event ItemRegistered(
+        ICrossChainArbitrable indexed _arbitrable,
+        uint256 indexed _arbitrableItemID,
+        string _metaEvidence,
+        bytes _arbitratorExtraData
+    );
+
+    /**
+     * @dev Emitted when an arbitrable item is registered.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     */
+    event DisputableItem(ICrossChainArbitrable indexed _arbitrable, uint256 indexed _arbitrableItemID);
+
+    /**
      * @dev Emitted when a dispute request for an arbitrable item is received.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _plaintiff The address of the dispute creator.
      */
     event DisputeRequest(
@@ -82,21 +94,26 @@ interface IHomeBinaryArbitrationProxy {
     /**
      * @dev Emitted when a dispute request for an arbitrable item is accepted.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _defendant The address of the defendant in the dispute.
      */
-    event DisputeAccepted(ICrossChainArbitrable indexed _arbitrable, uint256 indexed _arbitrableItemID);
+    event DisputeAccepted(
+        ICrossChainArbitrable indexed _arbitrable,
+        uint256 indexed _arbitrableItemID,
+        address _defendant
+    );
 
     /**
      * @dev Emitted when a dispute request for an arbitrable item is rejected.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
     event DisputeRejected(ICrossChainArbitrable indexed _arbitrable, uint256 indexed _arbitrableItemID);
 
     /**
      * @dev Emitted when a dispute was created on the Foreign Chain.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _disputeID the ID of the dispute on the Foreign Chain arbitrator.
      */
     event DisputeCreated(
@@ -108,46 +125,51 @@ interface IHomeBinaryArbitrationProxy {
     /**
      * @dev Emitted when a dispute creation on the Foreign Chain fails.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
     event DisputeFailed(ICrossChainArbitrable indexed _arbitrable, uint256 indexed _arbitrableItemID);
 
     /**
      * @dev Emitted when a dispute creation on the Foreign Chain fails.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _ruling The ruling provided by the arbitrator on the Foreign Chain.
      */
     event DisputeRuled(ICrossChainArbitrable indexed _arbitrable, uint256 indexed _arbitrableItemID, uint256 _ruling);
 
     /**
-     * @notice Registers an arbitrable item.
-     * @dev Should be called by the arbitrable contract when the meta evidence is created.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _metaEvidence The meta evidence.
-     */
-    function register(uint256 _arbitrableItemID, string calldata _metaEvidence) external;
-
-    /**
-     * @notice Sets an arbitrable item as disputable.
-     * @dev Should be called by the arbitrable contract when the arbitrable item can be disputed.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _defendant The address of the defendant in case there is a dispute.
-     * @param _deadline The absolute time until which the dispute can be created.
+     * @notice Registers the dispute params at arbitrable contract level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function setDisputable(
+    function registerArbitrableContract(string calldata _metaEvidence, bytes calldata _arbitratorExtraData) external;
+
+    /**
+     * @notice Registers the dispute params at arbitrable item level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    function registerArbitrableItem(
         uint256 _arbitrableItemID,
-        address _defendant,
-        uint256 _deadline,
+        string calldata _metaEvidence,
         bytes calldata _arbitratorExtraData
     ) external;
+
+    /**
+     * @notice Sets a given arbitrable item as disputable.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     */
+    function setDisputableItem(uint256 _arbitrableItemID) external;
 
     /**
      * @notice Receives a dispute request for an arbitrable item from the Foreign Chain.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _plaintiff The address of the dispute creator.
      */
     function receiveDisputeRequest(
@@ -161,7 +183,7 @@ interface IHomeBinaryArbitrationProxy {
      * @dev This will likely be called by an external 3rd-party (i.e.: a bot),
      * since currently there cannot be a bi-directional cross-chain message.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
     function relayDisputeAccepted(ICrossChainArbitrable _arbitrable, uint256 _arbitrableItemID) external;
 
@@ -173,7 +195,7 @@ interface IHomeBinaryArbitrationProxy {
      * @dev This will likely be called by an external 3rd-party (i.e.: a bot),
      * since currently there cannot be a bi-directional cross-chain message.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
     function relayDisputeRejected(ICrossChainArbitrable _arbitrable, uint256 _arbitrableItemID) external;
 
@@ -181,7 +203,7 @@ interface IHomeBinaryArbitrationProxy {
      * @notice Receives the dispute created on the Foreign Chain.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _disputeID The dispute ID.
      */
     function receiveDisputeCreated(
@@ -194,7 +216,7 @@ interface IHomeBinaryArbitrationProxy {
      * @notice Receives the failed dispute creation on the Foreign Chain.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
     function receiveDisputeFailed(ICrossChainArbitrable _arbitrable, uint256 _arbitrableItemID) external;
 
@@ -202,7 +224,7 @@ interface IHomeBinaryArbitrationProxy {
      * @notice Receives the ruling for a dispute from the Foreign Chain.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract on the Home Chain.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _ruling The ruling given by the arbitrator.
      */
     function receiveRuling(
@@ -217,41 +239,56 @@ interface IHomeBinaryArbitrationProxy {
  */
 interface IForeignBinaryArbitrationProxy is IArbitrable {
     /**
-     * @dev Emitted when an arbitrable item becomes disputable.
-     * @param _arbitrableID The ID of the arbitrable.
-     * @param _defendant The address of the defendant in case there is a dispute.
-     * @param _deadline The absolute time until which the dispute can be created.
+     * @dev Emitted when an arbitrable contract registration is received.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    event DisputePossible(uint256 indexed _arbitrableID, address indexed _defendant, uint256 _deadline);
+    event ContractReceived(address indexed _arbitrable, string _metaEvidence, bytes _arbitratorExtraData);
+
+    /**
+     * @dev Emitted when an arbitrable item registration is received.
+     * @param _arbitrationID The ID of the arbitration.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    event ItemReceived(uint256 indexed _arbitrationID, string _metaEvidence, bytes _arbitratorExtraData);
+
+    /**
+     * @dev Emitted when an receiving an arbitrable item marked as disputable.
+     * @param _arbitrationID The ID of the arbitration.
+     */
+    event DisputableItemReceived(uint256 indexed _arbitrationID);
 
     /**
      * @dev Emitted when a dispute is requested.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _plaintiff The address of the plaintiff.
      */
-    event DisputeRequested(uint256 indexed _arbitrableID, address indexed _plaintiff);
+    event DisputeRequested(uint256 indexed _arbitrationID, address indexed _plaintiff);
 
     /**
      * @dev Emitted when a dispute is accepted by the arbitrable contract on the Home Chain.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
+     * @param _defendant The address of the defendant party.
      */
-    event DisputeAccepted(uint256 indexed _arbitrableID);
+    event DisputeAccepted(uint256 indexed _arbitrationID, address indexed _defendant);
 
     /**
      * @dev Emitted when a dispute is rejected by the arbitrable contract on the Home Chain.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      */
-    event DisputeRejected(uint256 indexed _arbitrableID);
+    event DisputeRejected(uint256 indexed _arbitrationID);
 
     /**
      * @dev Emitted when a dispute creation fails.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _arbitrator Arbitrator contract address.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      * @param _reason The reason the dispute creation failed.
      */
     event DisputeFailed(
-        uint256 indexed _arbitrableID,
+        uint256 indexed _arbitrationID,
         IArbitrator indexed _arbitrator,
         bytes _arbitratorExtraData,
         bytes _reason
@@ -261,12 +298,12 @@ interface IForeignBinaryArbitrationProxy is IArbitrable {
      * @dev Emitted when a dispute creation fails.
      * This event is required to allow detecting the dispute for a given arbitrable was created.
      * The `Dispute` event from `IEvidence` does not have the proper indexes.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _arbitrator Arbitrator contract address.
      * @param _arbitratorDisputeID ID of the dispute on the Arbitrator contract.
      */
     event DisputeOngoing(
-        uint256 indexed _arbitrableID,
+        uint256 indexed _arbitrationID,
         IArbitrator indexed _arbitrator,
         uint256 indexed _arbitratorDisputeID
     );
@@ -275,54 +312,65 @@ interface IForeignBinaryArbitrationProxy is IArbitrable {
      * @dev Emitted when a dispute is ruled by the arbitrator.
      * This event is required to allow detecting the dispute for a given arbitrable was ruled.
      * The `Ruling` event from `IArbitrable` does not have the proper indexes.
-     * @param _arbitrableID The ID of the arbitrable.
+     * @param _arbitrationID The ID of the arbitration.
      * @param _ruling The ruling for the arbitration dispute.
      */
-    event DisputeRuled(uint256 indexed _arbitrableID, uint256 _ruling);
+    event DisputeRuled(uint256 indexed _arbitrationID, uint256 _ruling);
 
     /**
-     * @notice Receives the meta evidence from the Home Chain.
+     * @notice Receives the dispute params for an arbitrable contract.
      * @dev Should only be called by the xDAI/ETH bridge.
-     * @param _arbitrable The address of the arbitrable contract on the Home Chain.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _metaEvidence The meta evidence.
-     */
-    function receiveMetaEvidence(
-        address _arbitrable,
-        uint256 _arbitrableItemID,
-        string calldata _metaEvidence
-    ) external;
-
-    /**
-     * @notice Receives from the Home Chain that an arbitrable item is subject to a dispute.
-     * @dev Should only be called by the xDAI/ETH bridge.
-     * @param _arbitrable The address of the arbitrable contract on the Home Chain.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _defendant The address of the defendant in case there is a dispute.
-     * @param _deadline The absolute time until which the dispute can be created.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function receiveDisputable(
+    function receiveArbitrableContract(
         address _arbitrable,
-        uint256 _arbitrableItemID,
-        address _defendant,
-        uint256 _deadline,
+        string calldata _metaEvidence,
         bytes calldata _arbitratorExtraData
     ) external;
+
+    /**
+     * @notice Receives the dispute params for an arbitrable item.
+     * @dev Should only be called by the xDAI/ETH bridge.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    function receiveArbitrableItem(
+        address _arbitrable,
+        uint256 _arbitrableItemID,
+        string calldata _metaEvidence,
+        bytes calldata _arbitratorExtraData
+    ) external;
+
+    /**
+     * @notice Receives an arbitrable item marked as disputable.
+     * @dev Should only be called by the xDAI/ETH bridge.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     */
+    function receiveDisputableItem(address _arbitrable, uint256 _arbitrableItemID) external;
 
     /**
      * @notice Receives from the Home Chain that the dispute has been accepted.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _defendant The address of the defendant party.
      */
-    function receiveDisputeAccepted(address _arbitrable, uint256 _arbitrableItemID) external;
+    function receiveDisputeAccepted(
+        address _arbitrable,
+        uint256 _arbitrableItemID,
+        address _defendant
+    ) external;
 
     /**
      * @notice Receives from the Home Chain that the dispute has been rejected.
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
     function receiveDisputeRejected(address _arbitrable, uint256 _arbitrableItemID) external;
 }
