@@ -7,7 +7,6 @@ contract MockArbitrable is ICrossChainArbitrable {
     event ItemCreated(uint256 indexed _arbitrableItemID);
     event DisputeRequest(uint256 indexed _arbitrableItemID, address indexed _plaintiff);
     event DisputeCanceled(uint256 indexed _arbitrableItemID);
-    event DisputeConfirmed(uint256 indexed _arbitrableItemID, uint256 indexed _disputeID);
     event DisputeRuled(uint256 indexed _arbitrableItemID, uint256 _ruling);
 
     enum Status {None, Created, Disputable, DisputeRequested, DisputeOngoing, Settled}
@@ -123,16 +122,6 @@ contract MockArbitrable is ICrossChainArbitrable {
         emit DisputeCanceled(_arbitrableItemID);
     }
 
-    function confirmDispute(uint256 _arbitrableItemID, uint256 _disputeID) external override onlyArbitrator {
-        Item storage item = items[_arbitrableItemID];
-        require(item.status == Status.DisputeRequested, "Invalid status");
-
-        item.status = Status.DisputeOngoing;
-        disputeIDToItemID[_disputeID] = _arbitrableItemID;
-
-        emit DisputeConfirmed(_arbitrableItemID, _disputeID);
-    }
-
     function isDisputable(uint256 _arbitrableItemID) external override view returns (bool) {
         Item storage item = items[_arbitrableItemID];
         return item.status == Status.Disputable && block.timestamp <= item.disputableUntil;
@@ -143,15 +132,13 @@ contract MockArbitrable is ICrossChainArbitrable {
         return item.creator;
     }
 
-    function rule(uint256 _disputeID, uint256 _ruling) external override onlyArbitrator {
-        uint256 arbitrableItemID = disputeIDToItemID[_disputeID];
-        Item storage item = items[arbitrableItemID];
+    function rule(uint256 _arbitrableItemID, uint256 _ruling) external override onlyArbitrator {
+        Item storage item = items[_arbitrableItemID];
 
         require(item.status >= Status.DisputeRequested, "Invalid dispute status");
 
         item.status = Status.Settled;
 
-        emit DisputeRuled(arbitrableItemID, _ruling);
-        emit Ruling(IArbitrator(address(arbitrator)), _disputeID, _ruling);
+        emit DisputeRuled(_arbitrableItemID, _ruling);
     }
 }

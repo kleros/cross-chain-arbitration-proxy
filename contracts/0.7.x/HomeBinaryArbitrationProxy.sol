@@ -24,24 +24,25 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
      *    +-------------------->+ Rejected |
      *    |   [Rejected]        +-----+----+
      *    |                           |
-     *    |            Relay Rejected |
      *    |                           |
-     * +-(I)--+                       |    Receive Ruling  +---------+
-     * | None +<----------------------+--------------------+ Ongoing |
-     * +--+---+                       |                    +----+----+
-     *    |                           |                         ^
-     *    |            Receive Ruling | Receive                 |
-     *    |                           | Dispute Failed          |
-     *    |                           |                         | Receive Dispute Created
-     *    | Receive Request     +----------+                    |
-     *    +-------------------->+ Accepted +--------------------+
-     *       [Accepted]         +----------+
+     *    |                           | Relay Rejected
+     * +-(I)--+                       |
+     * | None +<----------------------+
+     * +--+---+                       |
+     *    |                           |
+     *    |                           | Receive Dispute Failed
+     *    |                           |
+     *    | Receive Request     +-----+----+                     +--(F)--+
+     *    +-------------------->+ Accepted +-------------------->+ Ruled |
+     *       [Accepted]         +----------+   Receive Ruling    +-------+
      */
-    enum Status {None, Rejected, Accepted, Ongoing}
+    enum Status {None, Rejected, Accepted, Ruled}
 
     struct ArbitrableItem {
         Status status;
-        uint256 disputeID;
+        address arbitrator;
+        uint256 arbitratorDisputeID;
+        uint256 ruling;
     }
 
     event Initialized();
@@ -259,23 +260,23 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract. UNTRUSTED.
      * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _disputeID The dispute ID.
+     * @param _arbitrator The address of the arbitrator in the home chain.
+     * @param _arbitratorDisputeID The dispute ID.
      */
     function receiveDisputeCreated(
         ICrossChainArbitrable _arbitrable,
         uint256 _arbitrableItemID,
-        uint256 _disputeID
+        address _arbitrator,
+        uint256 _arbitratorDisputeID
     ) external override onlyAmb onlyForeignProxy {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
         require(arbitrableItem.status == Status.Accepted, "Dispute is not accepted");
 
-        arbitrableItem.status = Status.Ongoing;
-        arbitrableItem.disputeID = _disputeID;
+        arbitrableItem.arbitrator = _arbitrator;
+        arbitrableItem.arbitratorDisputeID = _arbitratorDisputeID;
 
-        _arbitrable.confirmDispute(_arbitrableItemID, _disputeID);
-
-        emit DisputeCreated(_arbitrable, _arbitrableItemID, _disputeID);
+        emit DisputeCreated(_arbitrable, _arbitrableItemID, _arbitratorDisputeID);
     }
 
     /**
@@ -316,12 +317,12 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
 
         // Allow receiving ruling if the dispute was accepted but not created.
         // This can happen if the defendant fails to fund her side in time.
-        require(arbitrableItem.status >= Status.Accepted, "Dispute cannot be ruled");
+        require(arbitrableItem.status == Status.Accepted, "Dispute cannot be ruled");
 
-        uint256 disputeID = arbitrableItem.disputeID;
-        delete arbitrableItems[_arbitrable][_arbitrableItemID];
+        arbitrableItem.status = Status.Ruled;
+        arbitrableItem.ruling = _ruling;
 
-        _arbitrable.rule(disputeID, _ruling);
+        _arbitrable.rule(_arbitrableItemID, _ruling);
 
         emit DisputeRuled(_arbitrable, _arbitrableItemID, _ruling);
     }

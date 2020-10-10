@@ -21,13 +21,6 @@ interface ICrossChainArbitrable is IArbitrable {
     function cancelDispute(uint256 _arbitrableItemID) external;
 
     /**
-     * @notice Confirms the dispute was created.
-     * @param _arbitrableItemID The ID of the arbitration item.
-     * @param _disputeID The ID of the dispute.
-     */
-    function confirmDispute(uint256 _arbitrableItemID, uint256 _disputeID) external;
-
-    /**
      * @notice Returns whether an arbitrable item is subject to a dispute or not.
      * @param _arbitrableItemID The ID of the arbitration item.
      * @return The disputability status.
@@ -204,12 +197,14 @@ interface IHomeBinaryArbitrationProxy {
      * @dev Should only be called by the xDAI/ETH bridge.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
-     * @param _disputeID The dispute ID.
+     * @param _arbitrator The address of the arbitrator in the home chain.
+     * @param _arbitratorDisputeID The dispute ID.
      */
     function receiveDisputeCreated(
         ICrossChainArbitrable _arbitrable,
         uint256 _arbitrableItemID,
-        uint256 _disputeID
+        address _arbitrator,
+        uint256 _arbitratorDisputeID
     ) external;
 
     /**

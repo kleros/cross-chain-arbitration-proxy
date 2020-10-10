@@ -75,9 +75,8 @@ At this point users **CAN** request a dispute for that given arbitrable item.
             1. If the _defendant_ pays the due amount in time, then the dispute **SHOULD** be created.
                 1. If the dispute could be created
                     1. Then the _foreign proxy_ **MUST** relay that information to the _home proxy_.
-                        1. The _home proxy_ **MUST** inform the arbitrable contract that a dispute was created for that given arbitrable item.
                     1. Once the final ruling is recived, it **MUST** be relayed to the _home proxy_.
-                        1. The _home proxy_ will rule over the arbitrable item.
+                        1. The _home proxy_ **MUST** rule over the arbitrable item.
                 1. Otherwise, if the dispute creation fails
                     1. Then the _foreign proxy_ **MUST** relay that information to the _home proxy_.
                         1. The _home proxy_ **MUST** inform the arbitrable contract that the dispute could not be created.
@@ -99,18 +98,17 @@ At this point users **CAN** request a dispute for that given arbitrable item.
    +-------------------->+ Rejected |
    |   [Rejected]        +-----+----+
    |                           |
-   |            Relay Rejected |
    |                           |
-+-(I)--+                       |    Receive Ruling  +---------+
-| None +<----------------------+--------------------+ Ongoing |
-+--+---+                       |                    +----+----+
-   |                           |                         ^
-   |            Receive Ruling | Receive                 |
-   |                           | Dispute Failed          |
-   |                           |                         | Receive Dispute Created
-   | Receive Request     +----------+                    |
-   +-------------------->+ Accepted +--------------------+
-      [Accepted]         +----------+
+   |                           | Relay Rejected
++-(I)--+                       |
+| None +<----------------------+
++--+---+                       |
+   |                           |
+   |                           | Receive Dispute Failed
+   |                           |
+   | Receive Request     +-----+----+                     +--(F)--+
+   +-------------------->+ Accepted +-------------------->+ Ruled |
+      [Accepted]         +----------+   Receive Ruling    +-------+
 ```
 
 ### Foreign Proxy

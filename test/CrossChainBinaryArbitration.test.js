@@ -3,6 +3,7 @@ const {solidity} = require("ethereum-waffle");
 const {use, expect} = require("chai");
 const {getEmittedEvent} = require("./helpers/events");
 const {latestTime, increaseTime} = require("./helpers/time");
+const HP = require("./helpers/HomeProxy");
 const FP = require("./helpers/ForeignProxy");
 
 use(solidity);
@@ -230,7 +231,15 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
       });
 
       describe("When the dispute is accepted", () => {
-        it("Should allow the home proxy to tell the foreign proxy the dispute was accepted", async () => {
+        it("Should set the status for the arbitrable item on the home chain", async () => {
+          await requestDispute(arbitrable.address, arbitrableItemID);
+
+          const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
+
+          expect(arbitrableItem.status).to.equal(HP.Status.Accepted);
+        });
+
+        it("Should relay to the foreign proxy that the dispute was accepted", async () => {
           await requestDispute(arbitrable.address, arbitrableItemID);
           const {txPromise} = await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
 
@@ -271,7 +280,13 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
           await requestDispute(arbitrable.address, arbitrableItemID);
         });
 
-        it("Should allow the home proxy to tell the foreign proxy the dispute was rejected", async () => {
+        it("Should set the status for the arbitrable item on the home chain", async () => {
+          const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
+
+          expect(arbitrableItem.status).to.equal(HP.Status.Rejected);
+        });
+
+        it("Should relay to the foreign proxy the dispute was rejected", async () => {
           const {txPromise} = await relayDisputeRejected(arbitrable.address, arbitrableItemID);
 
           await expect(txPromise).to.emit(homeProxy, "DisputeRejected").withArgs(arbitrable.address, arbitrableItemID);
@@ -335,10 +350,14 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
           await expect(txPromise).to.emit(homeProxy, "DisputeCreated");
         });
 
-        it("Should confirm the dispute was created with the arbitrable contract", async () => {
-          const {txPromise} = await fundDisputeDefendant(arbitrationID);
+        it("Should set the arbitrator and dispute ID in the arbitrable item state in the home proxy", async () => {
+          const {receipt} = await fundDisputeDefendant(arbitrationID);
+          const arbitratorDisputeID = getEmittedEvent("Dispute", receipt).args._disputeID;
 
-          await expect(txPromise).to.emit(arbitrable, "DisputeConfirmed");
+          const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
+
+          expect(arbitrableItem.arbitrator).to.equal(arbitrator.address);
+          expect(arbitrableItem.arbitratorDisputeID).to.equal(arbitratorDisputeID);
         });
       });
 
@@ -406,6 +425,16 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
           .withArgs(arbitrable.address, arbitrableItemID, expectedRuling);
       });
 
+      it("Should set the status for the arbitrable item as ruled and store the ruling on the home proxy", async () => {
+        const expectedRuling = FP.Party.Defendant;
+        await giveFinalRuling(arbitrationID, expectedRuling);
+
+        const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
+
+        expect(arbitrableItem.status).to.equal(HP.Status.Ruled);
+        expect(arbitrableItem.ruling).to.equal(expectedRuling);
+      });
+
       it("Should rule the arbitrable contract with the ruling from the arbitrator", async () => {
         const expectedRuling = FP.Party.Defendant;
         const {txPromise} = await giveFinalRuling(arbitrationID, expectedRuling);
@@ -465,10 +494,6 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
 
         it("Should notify the home proxy that the dispute was created", async () => {
           await expect(txPromise).to.emit(homeProxy, "DisputeCreated");
-        });
-
-        it("Should confirm the dispute was created with the arbitrable contract", async () => {
-          await expect(txPromise).to.emit(arbitrable, "DisputeConfirmed");
         });
       });
 

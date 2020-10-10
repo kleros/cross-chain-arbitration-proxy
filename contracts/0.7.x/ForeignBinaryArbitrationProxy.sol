@@ -431,7 +431,8 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
                     methodSelector,
                     arbitration.arbitrable,
                     arbitration.arbitrableItemID,
-                    getDisputeID(arbitration.arbitrator, arbitration.arbitratorDisputeID)
+                    arbitration.arbitrator,
+                    arbitration.arbitratorDisputeID
                 );
                 amb.requireToPassMessage(homeProxy, data, amb.maxGasPerTx());
             } else {
