@@ -33,6 +33,13 @@ interface ICrossChainArbitrable is IArbitrable {
      * @return The address of the defendant party.
      */
     function getDefendant(uint256 _arbitrableItemID) external view returns (address);
+
+    /**
+     * @notice Give a ruling for a dispute. Must be called by the arbitrator.
+     * @param _arbitrableItemID The ID of the arbitration item.
+     * @param _ruling Ruling given by the arbitrator. Note that 0 is reserved for "Not able/wanting to make a decision".
+     */
+    function rule(uint256 _arbitrableItemID, uint256 _ruling) external override;
 }
 
 /**
