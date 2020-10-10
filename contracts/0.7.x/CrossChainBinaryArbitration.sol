@@ -248,17 +248,24 @@ interface IForeignBinaryArbitrationProxy is IArbitrable {
 
     /**
      * @dev Emitted when an arbitrable item registration is received.
-     * @param _arbitrationID The ID of the arbitration.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    event ItemReceived(uint256 indexed _arbitrationID, string _metaEvidence, bytes _arbitratorExtraData);
+    event ItemReceived(
+        address indexed _arbitrable,
+        uint256 indexed _arbitrableItemID,
+        string _metaEvidence,
+        bytes _arbitratorExtraData
+    );
 
     /**
      * @dev Emitted when an receiving an arbitrable item marked as disputable.
-     * @param _arbitrationID The ID of the arbitration.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      */
-    event DisputableItemReceived(uint256 indexed _arbitrationID);
+    event DisputableItemReceived(address indexed _arbitrable, uint256 indexed _arbitrableItemID);
 
     /**
      * @dev Emitted when a dispute is requested.

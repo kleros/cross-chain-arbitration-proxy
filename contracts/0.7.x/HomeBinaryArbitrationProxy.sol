@@ -11,7 +11,7 @@ pragma solidity ^0.7.2;
 
 import "@kleros/erc-792/contracts/erc-1497/IEvidence.sol";
 import "./dependencies/IAMB.sol";
-import "./CrossChainArbitration.sol";
+import "./CrossChainBinaryArbitration.sol";
 
 contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     /**
@@ -136,6 +136,7 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     function registerArbitrableContract(string calldata _metaEvidence, bytes calldata _arbitratorExtraData)
         external
         override
+        onlyIfInitialized
     {
         emit ContractRegistered(ICrossChainArbitrable(msg.sender), _metaEvidence, _arbitratorExtraData);
 
@@ -155,10 +156,10 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
         uint256 _arbitrableItemID,
         string calldata _metaEvidence,
         bytes calldata _arbitratorExtraData
-    ) external override {
+    ) external override onlyIfInitialized {
         emit ItemRegistered(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _metaEvidence, _arbitratorExtraData);
 
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableContract.selector;
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableItem.selector;
         bytes memory data = abi.encodeWithSelector(
             methodSelector,
             msg.sender,
@@ -174,7 +175,7 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
      * @dev Should be called only by the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
      */
-    function setDisputableItem(uint256 _arbitrableItemID) external override {
+    function setDisputableItem(uint256 _arbitrableItemID) external override onlyIfInitialized {
         emit DisputableItem(ICrossChainArbitrable(msg.sender), _arbitrableItemID);
 
         bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveDisputableItem.selector;

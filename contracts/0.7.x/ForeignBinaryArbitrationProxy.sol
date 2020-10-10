@@ -14,7 +14,7 @@ import "@kleros/erc-792/contracts/IArbitrator.sol";
 import "@kleros/erc-792/contracts/erc-1497/IEvidence.sol";
 import "@kleros/ethereum-libraries/contracts/CappedMath.sol";
 import "./dependencies/IAMB.sol";
-import "./CrossChainArbitration.sol";
+import "./CrossChainBinaryArbitration.sol";
 
 contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvidence {
     using CappedMath for uint256;
@@ -124,15 +124,23 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
      * @param _party The party which received the contribution.
      * @param _contributor The address of the contributor.
      * @param _amount The amount contributed.
+     * @param _roundNumber The round from which to withdraw.
      */
-    event FeeContribution(uint256 indexed _arbitrationID, Party _party, address indexed _contributor, uint256 _amount);
+    event FeeContribution(
+        uint256 indexed _arbitrationID,
+        Party _party,
+        address indexed _contributor,
+        uint256 _amount,
+        uint256 indexed _roundNumber
+    );
 
     /**
      * @dev Emitted when someone pays for the full dispute or appeal fee.
      * @param _arbitrationID The ID of the arbitration.
      * @param _party The party which received the contribution.
+     * @param _roundNumber The round from which to withdraw.
      */
-    event FeePaid(uint256 indexed _arbitrationID, Party _party);
+    event FeePaid(uint256 indexed _arbitrationID, Party indexed _party, uint256 indexed _roundNumber);
 
     modifier onlyGovernor() {
         require(msg.sender == governor, "Only governor allowed");
@@ -280,7 +288,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         params.metaEvidence = _metaEvidence;
         params.arbitratorExtraData = _arbitratorExtraData;
 
-        emit ItemReceived(arbitrationID, _metaEvidence, _arbitratorExtraData);
+        emit ItemReceived(_arbitrable, _arbitrableItemID, _metaEvidence, _arbitratorExtraData);
     }
 
     /**
@@ -299,7 +307,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
 
         disputables[arbitrationID] = true;
 
-        emit DisputableItemReceived(arbitrationID);
+        emit DisputableItemReceived(_arbitrable, _arbitrableItemID);
     }
 
     /**
@@ -313,7 +321,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         (bytes storage arbitratorExtraData, ) = getDisputeParams(arbitrationID, arbitration.arbitrable);
         uint256 arbitrationCost = arbitrator.arbitrationCost(arbitratorExtraData);
 
-        require(disputables[arbitrationID], "Arbitrable is not disputable");
+        require(disputables[arbitrationID], "Item is not disputable");
         require(arbitration.status == Status.None, "Dispute already requested");
         require(msg.value >= arbitrationCost, "Deposit value too low");
 
@@ -459,6 +467,9 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         try arbitrator.createDispute{value: _arbitrationCost}(NUMBER_OF_CHOICES, _arbitratorExtraData) returns (
             uint256 arbitratorDisputeID
         ) {
+            Round storage round = arbitration.rounds[arbitration.rounds.length - 1];
+            round.feeRewards = round.feeRewards.subCap(_arbitrationCost);
+
             uint256 disputeID = getDisputeID(arbitrator, arbitratorDisputeID);
 
             arbitration.status = Status.Ongoing;
@@ -784,7 +795,8 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         uint256 _totalRequired
     ) internal returns (uint256 remainder, bool fullyPaid) {
         Arbitration storage arbitration = arbitrations[_arbitrationID];
-        Round storage round = arbitration.rounds[arbitration.rounds.length - 1];
+        uint256 roundNumber = arbitration.rounds.length - 1;
+        Round storage round = arbitration.rounds[roundNumber];
 
         uint256 contribution;
         (contribution, remainder) = calculateContribution(
@@ -796,12 +808,12 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         round.paidFees[uint256(_party)] += contribution;
         round.contributions[_contributor][uint256(_party)] += contribution;
 
-        emit FeeContribution(_arbitrationID, _party, _contributor, contribution);
+        emit FeeContribution(_arbitrationID, _party, _contributor, contribution, roundNumber);
 
         if (round.paidFees[uint256(_party)] >= _totalRequired) {
             round.fullyPaid[uint256(_party)] = true;
 
-            emit FeePaid(_arbitrationID, _party);
+            emit FeePaid(_arbitrationID, _party, roundNumber);
         }
 
         return (remainder, round.fullyPaid[uint256(_party)]);
