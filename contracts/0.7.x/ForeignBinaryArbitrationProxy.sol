@@ -59,6 +59,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     }
 
     struct DisputeParams {
+        bool registered;
         bytes arbitratorExtraData; // Extra data for the arbitrator.
         string metaEvidence; // The MetaEvidence for the dispute.
     }
@@ -258,8 +259,10 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     ) external override onlyAmb onlyHomeProxy {
         DisputeParams storage params = contractDisputeParams[_arbitrable];
 
-        require(params.arbitratorExtraData.length == 0, "Contract already registered");
+        require(!params.registered, "Contract already registered");
+        require(bytes(_metaEvidence).length > 0, "MetaEvidence cannot be empty");
 
+        params.registered = true;
         params.metaEvidence = _metaEvidence;
         params.arbitratorExtraData = _arbitratorExtraData;
 
@@ -283,8 +286,15 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
         DisputeParams storage params = itemDisputeParams[arbitrationID];
 
-        require(params.arbitratorExtraData.length == 0, "Item already registered");
+        require(!params.registered, "Item already registered");
 
+        DisputeParams storage paramsForContract = contractDisputeParams[_arbitrable];
+        require(
+            bytes(paramsForContract.metaEvidence).length > 0 || bytes(_metaEvidence).length > 0,
+            "MetaEvidence cannot be empty"
+        );
+
+        params.registered = true;
         params.metaEvidence = _metaEvidence;
         params.arbitratorExtraData = _arbitratorExtraData;
 
@@ -857,13 +867,10 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         DisputeParams storage forItem = itemDisputeParams[_arbitrationID];
         DisputeParams storage forContract = contractDisputeParams[_arbitrable];
 
-        arbitratorExtraData = forItem.arbitratorExtraData.length > 0
-            ? forItem.arbitratorExtraData
-            : forContract.arbitratorExtraData;
+        require(forContract.registered || forItem.registered, "Dispute params not registered");
 
+        arbitratorExtraData = forItem.registered ? forItem.arbitratorExtraData : forContract.arbitratorExtraData;
         metaEvidence = bytes(forItem.metaEvidence).length > 0 ? forItem.metaEvidence : forContract.metaEvidence;
-
-        require(arbitratorExtraData.length > 0 && bytes(metaEvidence).length > 0, "Dispute params not registered");
     }
 
     /**
