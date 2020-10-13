@@ -129,45 +129,72 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     }
 
     /**
-     * @notice Registers the dispute params at arbitrable item level.
+     * @notice Registers the meta evidence at the arbitrable contact level.
      * @dev Should be called only by the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function registerArbitrableContract(string calldata _metaEvidence, bytes calldata _arbitratorExtraData)
-        external
-        override
-        onlyIfInitialized
-    {
-        emit ContractRegistered(ICrossChainArbitrable(msg.sender), _metaEvidence, _arbitratorExtraData);
+    function registerContractMetaEvidence(string calldata _metaEvidence) external override onlyIfInitialized {
+        emit ContractMetaEvidenceRegistered(ICrossChainArbitrable(msg.sender), _metaEvidence);
 
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableContract.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _metaEvidence, _arbitratorExtraData);
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveContractMetaEvidence.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _metaEvidence);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 
     /**
-     * @notice Registers the dispute params at arbitrable contract level.
+     * @notice Registers the arbitrator extra data at the arbitrable contact level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    function registerContractArbitratorExtraData(bytes calldata _arbitratorExtraData)
+        external
+        override
+        onlyIfInitialized
+    {
+        emit ContractArbitratorExtraDataRegistered(ICrossChainArbitrable(msg.sender), _arbitratorExtraData);
+
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveContractArbitratorExtraData.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitratorExtraData);
+        amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
+    }
+
+    /**
+     * @notice Registers the meta evidence at the arbitrable item level.
      * @dev Should be called only by the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     */
+    function registerItemMetaEvidence(uint256 _arbitrableItemID, string calldata _metaEvidence)
+        external
+        override
+        onlyIfInitialized
+    {
+        emit ItemMetaEvidenceRegistered(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _metaEvidence);
+
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveItemMetaEvidence.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitrableItemID, _metaEvidence);
+        amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
+    }
+
+    /**
+     * @notice Registers the arbitrator extra data at the arbitrable item level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function registerArbitrableItem(
-        uint256 _arbitrableItemID,
-        string calldata _metaEvidence,
-        bytes calldata _arbitratorExtraData
-    ) external override onlyIfInitialized {
-        emit ItemRegistered(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _metaEvidence, _arbitratorExtraData);
-
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableItem.selector;
-        bytes memory data = abi.encodeWithSelector(
-            methodSelector,
-            msg.sender,
+    function registerItemArbitratorExtraData(uint256 _arbitrableItemID, bytes calldata _arbitratorExtraData)
+        external
+        override
+        onlyIfInitialized
+    {
+        emit ItemArbitratorExtraDataRegistered(
+            ICrossChainArbitrable(msg.sender),
             _arbitrableItemID,
-            _metaEvidence,
             _arbitratorExtraData
         );
+
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveItemArbitratorExtraData.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitrableItemID, _arbitratorExtraData);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 

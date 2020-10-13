@@ -47,28 +47,40 @@ interface ICrossChainArbitrable is IArbitrable {
  */
 interface IHomeBinaryArbitrationProxy {
     /**
-     * @dev Emitted when an arbitrable contract is registered.
+     * @dev Emitted when an arbitrable contract metadata is registered.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     */
+    event ContractMetaEvidenceRegistered(ICrossChainArbitrable indexed _arbitrable, string _metaEvidence);
+
+    /**
+     * @dev Emitted when an arbitrable contract arbitrator extra data  is registered.
+     * @param _arbitrable The address of the arbitrable contract.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    event ContractRegistered(
-        ICrossChainArbitrable indexed _arbitrable,
-        string _metaEvidence,
-        bytes _arbitratorExtraData
-    );
+    event ContractArbitratorExtraDataRegistered(ICrossChainArbitrable indexed _arbitrable, bytes _arbitratorExtraData);
 
     /**
      * @dev Emitted when an item is registered.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    event ItemRegistered(
+    event ItemMetaEvidenceRegistered(
         ICrossChainArbitrable indexed _arbitrable,
         uint256 indexed _arbitrableItemID,
-        string _metaEvidence,
+        string _metaEvidence
+    );
+
+    /**
+     * @dev Emitted when an item is registered.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    event ItemArbitratorExtraDataRegistered(
+        ICrossChainArbitrable indexed _arbitrable,
+        uint256 indexed _arbitrableItemID,
         bytes _arbitratorExtraData
     );
 
@@ -138,25 +150,34 @@ interface IHomeBinaryArbitrationProxy {
     event DisputeRuled(ICrossChainArbitrable indexed _arbitrable, uint256 indexed _arbitrableItemID, uint256 _ruling);
 
     /**
-     * @notice Registers the dispute params at arbitrable contract level.
+     * @notice Registers meta evidence at arbitrable contract level.
      * @dev Should be called only by the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function registerArbitrableContract(string calldata _metaEvidence, bytes calldata _arbitratorExtraData) external;
+    function registerContractMetaEvidence(string calldata _metaEvidence) external;
 
     /**
-     * @notice Registers the dispute params at arbitrable item level.
+     * @notice Registers arbitrator extra data at arbitrable contract level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    function registerContractArbitratorExtraData(bytes calldata _arbitratorExtraData) external;
+
+    /**
+     * @notice Registers meta evidence at arbitrable item level.
      * @dev Should be called only by the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
+     */
+    function registerItemMetaEvidence(uint256 _arbitrableItemID, string calldata _metaEvidence) external;
+
+    /**
+     * @notice Registers arbitrator extra data at arbitrable item level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function registerArbitrableItem(
-        uint256 _arbitrableItemID,
-        string calldata _metaEvidence,
-        bytes calldata _arbitratorExtraData
-    ) external;
+    function registerItemArbitratorExtraData(uint256 _arbitrableItemID, bytes calldata _arbitratorExtraData) external;
 
     /**
      * @notice Sets a given arbitrable item as disputable.
@@ -241,24 +262,40 @@ interface IHomeBinaryArbitrationProxy {
  */
 interface IForeignBinaryArbitrationProxy is IArbitrable {
     /**
-     * @dev Emitted when an arbitrable contract registration is received.
+     * @dev Emitted when an arbitrable contract meta evidence is received.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    event ContractReceived(address indexed _arbitrable, string _metaEvidence, bytes _arbitratorExtraData);
+    event ContractMetaEvidenceReceived(address indexed _arbitrable, string _metaEvidence);
 
     /**
-     * @dev Emitted when an arbitrable item registration is received.
+     * @dev Emitted when an arbitrable contract arbitrator extra data is received.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    event ContractArbitratorExtraDataReceived(address indexed _arbitrable, bytes _arbitratorExtraData);
+
+    /**
+     * @dev Emitted when an arbitrable item meta evidence is received.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    event ItemReceived(
+    event ItemMetaEvidenceReceived(
         address indexed _arbitrable,
         uint256 indexed _arbitrableItemID,
-        string _metaEvidence,
+        string _metaEvidence
+    );
+
+    /**
+     * @dev Emitted when an arbitrable item meta evidence is received.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    event ItemArbitratorExtraDataReceived(
+        address indexed _arbitrable,
+        uint256 indexed _arbitrableItemID,
         bytes _arbitratorExtraData
     );
 
@@ -327,30 +364,44 @@ interface IForeignBinaryArbitrationProxy is IArbitrable {
     event DisputeRuled(uint256 indexed _arbitrationID, uint256 _ruling);
 
     /**
-     * @notice Receives the dispute params for an arbitrable contract.
-     * @dev Should only be called by the xDAI/ETH bridge.
+     * @notice Receives meta evidence at arbitrable contract level.
+     * @dev Should be called only by the arbitrable contract.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function receiveArbitrableContract(
-        address _arbitrable,
-        string calldata _metaEvidence,
-        bytes calldata _arbitratorExtraData
-    ) external;
+    function receiveContractMetaEvidence(address _arbitrable, string calldata _metaEvidence) external;
 
     /**
-     * @notice Receives the dispute params for an arbitrable item.
-     * @dev Should only be called by the xDAI/ETH bridge.
+     * @notice Receives arbitrator extra data at arbitrable contract level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    function receiveContractArbitratorExtraData(address _arbitrable, bytes calldata _arbitratorExtraData) external;
+
+    /**
+     * @notice Receives meta evidence at arbitrable item level.
+     * @dev Should be called only by the arbitrable contract.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function receiveArbitrableItem(
+    function receiveItemMetaEvidence(
         address _arbitrable,
         uint256 _arbitrableItemID,
-        string calldata _metaEvidence,
+        string calldata _metaEvidence
+    ) external;
+
+    /**
+     * @notice Receives arbitrator extra data at arbitrable item level.
+     * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
+     * @param _arbitratorExtraData The extra data for the arbitrator.
+     */
+    function receiveItemArbitratorExtraData(
+        address _arbitrable,
+        uint256 _arbitrableItemID,
         bytes calldata _arbitratorExtraData
     ) external;
 
