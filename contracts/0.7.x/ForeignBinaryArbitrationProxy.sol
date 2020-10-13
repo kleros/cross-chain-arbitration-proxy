@@ -45,6 +45,8 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
 
     enum Party {None, Defendant, Plaintiff}
 
+    enum DisputeParamsLevel {None, Contract, Item}
+
     struct Arbitration {
         Status status; // Status of the request.
         uint88 acceptedAt; // The time when the dispute creation was accepted.
@@ -58,10 +60,25 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         Round[] rounds; // Rounds of the dispute
     }
 
-    struct DisputeParams {
+    struct ContractDisputeParams {
         bool registered;
         bytes arbitratorExtraData; // Extra data for the arbitrator.
         string metaEvidence; // The MetaEvidence for the dispute.
+    }
+
+    struct ItemMetaEvidence {
+        mapping(uint256 => bytes32) hashes; // Hash indexes
+        mapping(bytes32 => string) values; // The MetaEvidence for the dispute.
+    }
+
+    struct ItemArbitratorExtraData {
+        mapping(uint256 => bytes32) hashes; // Hash indexes
+        mapping(bytes32 => bytes) values; // Extra data for the arbitrator.
+    }
+
+    struct ItemDisputeParams {
+        ItemMetaEvidence metaEvidence;
+        ItemArbitratorExtraData arbitratorExtraData;
     }
 
     struct Round {
@@ -105,10 +122,13 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     uint256 public loserStakeMultiplier;
 
     /// @dev Dispute params at contract level
-    mapping(address => DisputeParams) public contractDisputeParams;
+    mapping(address => ContractDisputeParams) private contractDisputeParams;
 
     /// @dev Dispute params at arbitrable item level
-    mapping(uint256 => DisputeParams) public itemDisputeParams;
+    ItemDisputeParams private itemDisputeParams;
+
+    /// @dev Contracts must set dispute params level to be either at contract or item level.
+    mapping(address => DisputeParamsLevel) public contractToDisputeParamsLevel;
 
     /// @dev Maps aribtrableID to the disputable state.
     mapping(uint256 => bool) public disputables;
@@ -257,10 +277,13 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         string calldata _metaEvidence,
         bytes calldata _arbitratorExtraData
     ) external override onlyAmb onlyHomeProxy {
-        DisputeParams storage params = contractDisputeParams[_arbitrable];
+        require(contractToDisputeParamsLevel[_arbitrable] != DisputeParamsLevel.Item, "Only per item params allowed");
 
-        require(!params.registered, "Contract already registered");
+        ContractDisputeParams storage params = contractDisputeParams[_arbitrable];
+
         require(bytes(_metaEvidence).length > 0, "MetaEvidence cannot be empty");
+
+        contractToDisputeParamsLevel[_arbitrable] = DisputeParamsLevel.Contract;
 
         params.registered = true;
         params.metaEvidence = _metaEvidence;
@@ -283,20 +306,26 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         string calldata _metaEvidence,
         bytes calldata _arbitratorExtraData
     ) external override onlyAmb onlyHomeProxy {
-        uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
-        DisputeParams storage params = itemDisputeParams[arbitrationID];
-
-        require(!params.registered, "Item already registered");
-
-        DisputeParams storage paramsForContract = contractDisputeParams[_arbitrable];
         require(
-            bytes(paramsForContract.metaEvidence).length > 0 || bytes(_metaEvidence).length > 0,
-            "MetaEvidence cannot be empty"
+            contractToDisputeParamsLevel[_arbitrable] != DisputeParamsLevel.Contract,
+            "Only per contract params allowed"
         );
 
-        params.registered = true;
-        params.metaEvidence = _metaEvidence;
-        params.arbitratorExtraData = _arbitratorExtraData;
+        ContractDisputeParams storage paramsForContract = contractDisputeParams[_arbitrable];
+
+        require(!paramsForContract.registered, "Item cannot be registerd");
+        require(bytes(_metaEvidence).length > 0, "MetaEvidence cannot be empty");
+
+        contractToDisputeParamsLevel[_arbitrable] = DisputeParamsLevel.Item;
+
+        uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
+        bytes32 hashedMetaEvidence = keccak256(abi.encodePacked(_metaEvidence));
+        bytes32 hashedArbitratorExtraData = keccak256(abi.encodePacked(_arbitratorExtraData));
+
+        itemDisputeParams.metaEvidence.hashes[arbitrationID] = hashedMetaEvidence;
+        itemDisputeParams.metaEvidence.values[hashedMetaEvidence] = _metaEvidence;
+        itemDisputeParams.arbitratorExtraData.hashes[arbitrationID] = hashedArbitratorExtraData;
+        itemDisputeParams.arbitratorExtraData.values[hashedArbitratorExtraData] = _arbitratorExtraData;
 
         emit ItemReceived(_arbitrable, _arbitrableItemID, _metaEvidence, _arbitratorExtraData);
     }
@@ -328,7 +357,7 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     function requestDispute(address _arbitrable, uint256 _arbitrableItemID) external payable {
         uint256 arbitrationID = getArbitrationID(_arbitrable, _arbitrableItemID);
         Arbitration storage arbitration = arbitrations[arbitrationID];
-        (bytes storage arbitratorExtraData, ) = getDisputeParams(arbitrationID, arbitration.arbitrable);
+        (bytes storage arbitratorExtraData, ) = getDisputeParams(arbitrationID, _arbitrable);
         uint256 arbitrationCost = arbitrator.arbitrationCost(arbitratorExtraData);
 
         require(disputables[arbitrationID], "Item is not disputable");
@@ -852,6 +881,39 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
     }
 
     /**
+     * @notice Gets the dispute params for a given arbitrable contract.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @return arbitratorExtraData The extra data for the arbitrator.
+     * @return metaEvidence The meta evidence for the item.
+     */
+    function getContractDisputeParams(address _arbitrable)
+        external
+        view
+        returns (bytes memory arbitratorExtraData, string memory metaEvidence)
+    {
+        ContractDisputeParams storage forContract = contractDisputeParams[_arbitrable];
+        require(forContract.registered, "Dispute params not registered");
+
+        metaEvidence = forContract.metaEvidence;
+        arbitratorExtraData = forContract.arbitratorExtraData;
+    }
+
+    /**
+     * @notice Gets the dispute params for a given arbitrable contract.
+     * @param _arbitrable The address of the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitration item.
+     * @return arbitratorExtraData The extra data for the arbitrator.
+     * @return metaEvidence The meta evidence for the item.
+     */
+    function getItemDisputeParams(address _arbitrable, uint256 _arbitrableItemID)
+        external
+        view
+        returns (bytes memory arbitratorExtraData, string memory metaEvidence)
+    {
+        return getDisputeParams(getArbitrationID(_arbitrable, _arbitrableItemID), _arbitrable);
+    }
+
+    /**
      * @notice Gets the dispute params for a given arbitrable item.
      * @dev If a contract registered both params at contract and item level, the one at item level taks precedence.
      * @param _arbitrationID The ID of the arbitration item.
@@ -864,13 +926,23 @@ contract ForeignBinaryArbitrationProxy is IForeignBinaryArbitrationProxy, IEvide
         view
         returns (bytes storage arbitratorExtraData, string storage metaEvidence)
     {
-        DisputeParams storage forItem = itemDisputeParams[_arbitrationID];
-        DisputeParams storage forContract = contractDisputeParams[_arbitrable];
+        ContractDisputeParams storage forContract = contractDisputeParams[_arbitrable];
 
-        require(forContract.registered || forItem.registered, "Dispute params not registered");
+        if (uint256(itemDisputeParams.metaEvidence.hashes[_arbitrationID]) == 0) {
+            require(forContract.registered, "Dispute params not registered");
+            metaEvidence = forContract.metaEvidence;
+        } else {
+            bytes32 hash = itemDisputeParams.metaEvidence.hashes[_arbitrationID];
+            metaEvidence = itemDisputeParams.metaEvidence.values[hash];
+        }
 
-        arbitratorExtraData = forItem.registered ? forItem.arbitratorExtraData : forContract.arbitratorExtraData;
-        metaEvidence = bytes(forItem.metaEvidence).length > 0 ? forItem.metaEvidence : forContract.metaEvidence;
+        if (uint256(itemDisputeParams.arbitratorExtraData.hashes[_arbitrationID]) == 0) {
+            require(forContract.registered, "Dispute params not registered");
+            arbitratorExtraData = forContract.arbitratorExtraData;
+        } else {
+            bytes32 hash = itemDisputeParams.arbitratorExtraData.hashes[_arbitrationID];
+            arbitratorExtraData = itemDisputeParams.arbitratorExtraData.values[hash];
+        }
     }
 
     /**

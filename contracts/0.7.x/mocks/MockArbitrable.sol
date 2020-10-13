@@ -50,8 +50,10 @@ contract MockArbitrable is ICrossChainArbitrable {
         arbitrator = _arbitrator;
         arbitratorExtraData = _arbitratorExtraData;
         disputeTimeout = _disputeTimeout;
+    }
 
-        arbitrator.registerArbitrableContract(_metaEvidence, _arbitratorExtraData);
+    function registerContract() external onlyGovernor {
+        arbitrator.registerArbitrableContract(metaEvidence, arbitratorExtraData);
     }
 
     function createItem(string calldata _metaEvidence, bytes calldata _arbitratorExtraData) external {

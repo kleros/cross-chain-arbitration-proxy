@@ -5,7 +5,7 @@ async function latestTime() {
 }
 
 async function increaseTime(secondsPassed) {
-  return time.increase(secondsPassed);
+  return time.increase(String(secondsPassed));
 }
 
 async function advanceBlock() {
