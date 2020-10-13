@@ -47,20 +47,6 @@ interface ICrossChainArbitrable is IArbitrable {
  */
 interface IHomeBinaryArbitrationProxy {
     /**
-     * @dev Emitted when an arbitrable contract metadata is registered.
-     * @param _arbitrable The address of the arbitrable contract.
-     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     */
-    event ContractMetaEvidenceRegistered(ICrossChainArbitrable indexed _arbitrable, string _metaEvidence);
-
-    /**
-     * @dev Emitted when an arbitrable contract arbitrator extra data  is registered.
-     * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
-     */
-    event ContractArbitratorExtraDataRegistered(ICrossChainArbitrable indexed _arbitrable, bytes _arbitratorExtraData);
-
-    /**
      * @dev Emitted when an item is registered.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
@@ -148,20 +134,6 @@ interface IHomeBinaryArbitrationProxy {
      * @param _ruling The ruling provided by the arbitrator on the Foreign Chain.
      */
     event DisputeRuled(ICrossChainArbitrable indexed _arbitrable, uint256 indexed _arbitrableItemID, uint256 _ruling);
-
-    /**
-     * @notice Registers meta evidence at arbitrable contract level.
-     * @dev Should be called only by the arbitrable contract.
-     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     */
-    function registerContractMetaEvidence(string calldata _metaEvidence) external;
-
-    /**
-     * @notice Registers arbitrator extra data at arbitrable contract level.
-     * @dev Should be called only by the arbitrable contract.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
-     */
-    function registerContractArbitratorExtraData(bytes calldata _arbitratorExtraData) external;
 
     /**
      * @notice Registers meta evidence at arbitrable item level.
@@ -262,20 +234,6 @@ interface IHomeBinaryArbitrationProxy {
  */
 interface IForeignBinaryArbitrationProxy is IArbitrable {
     /**
-     * @dev Emitted when an arbitrable contract meta evidence is received.
-     * @param _arbitrable The address of the arbitrable contract.
-     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     */
-    event ContractMetaEvidenceReceived(address indexed _arbitrable, string _metaEvidence);
-
-    /**
-     * @dev Emitted when an arbitrable contract arbitrator extra data is received.
-     * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
-     */
-    event ContractArbitratorExtraDataReceived(address indexed _arbitrable, bytes _arbitratorExtraData);
-
-    /**
      * @dev Emitted when an arbitrable item meta evidence is received.
      * @param _arbitrable The address of the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitration item on the arbitrable contract.
@@ -362,22 +320,6 @@ interface IForeignBinaryArbitrationProxy is IArbitrable {
      * @param _ruling The ruling for the arbitration dispute.
      */
     event DisputeRuled(uint256 indexed _arbitrationID, uint256 _ruling);
-
-    /**
-     * @notice Receives meta evidence at arbitrable contract level.
-     * @dev Should be called only by the arbitrable contract.
-     * @param _arbitrable The address of the arbitrable contract.
-     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     */
-    function receiveContractMetaEvidence(address _arbitrable, string calldata _metaEvidence) external;
-
-    /**
-     * @notice Receives arbitrator extra data at arbitrable contract level.
-     * @dev Should be called only by the arbitrable contract.
-     * @param _arbitrable The address of the arbitrable contract.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
-     */
-    function receiveContractArbitratorExtraData(address _arbitrable, bytes calldata _arbitratorExtraData) external;
 
     /**
      * @notice Receives meta evidence at arbitrable item level.

@@ -94,10 +94,18 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
       it("Should emit the register events for the arbitrable contract on the home proxy after deploy and relay the data to the foreign proxy", async () => {
         const {txPromise} = await registerContract();
 
-        await expect(txPromise).to.emit(homeProxy, "ContractMetaEvidenceRegistered");
-        await expect(txPromise).to.emit(homeProxy, "ContractArbitratorExtraDataRegistered");
-        await expect(txPromise).to.emit(foreignProxy, "ContractMetaEvidenceReceived");
-        await expect(txPromise).to.emit(foreignProxy, "ContractArbitratorExtraDataReceived");
+        await expect(txPromise)
+          .to.emit(homeProxy, "ItemMetaEvidenceRegistered")
+          .withArgs(arbitrable.address, "0", contractMetaEvidence);
+        await expect(txPromise)
+          .to.emit(homeProxy, "ItemArbitratorExtraDataRegistered")
+          .withArgs(arbitrable.address, "0", contractArbitratorExtraData);
+        await expect(txPromise)
+          .to.emit(foreignProxy, "ItemMetaEvidenceReceived")
+          .withArgs(arbitrable.address, "0", contractMetaEvidence);
+        await expect(txPromise)
+          .to.emit(foreignProxy, "ItemArbitratorExtraDataReceived")
+          .withArgs(arbitrable.address, "0", contractArbitratorExtraData);
       });
 
       it("Should set the dispute params for the contract on the home proxy after deploy and relay the data to the foreign proxy", async () => {
@@ -178,7 +186,7 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
     it("Should not allow to request a dispute for an unexisting item", async () => {
       const {txPromise} = await requestDispute(arbitrable.address, 1234);
 
-      await expect(txPromise).to.be.revertedWith("Dispute params level not set");
+      await expect(txPromise).to.be.revertedWith("Item not found");
     });
 
     it("Should not allow to request a dispute for a non disputable item", async () => {
@@ -191,7 +199,7 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
     });
   });
 
-  describe("Dispute Workflow", () => {
+  describe.only("Dispute Workflow", () => {
     let arbitrableItemID;
     let arbitrationID;
 

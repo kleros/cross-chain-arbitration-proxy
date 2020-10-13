@@ -129,36 +129,6 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     }
 
     /**
-     * @notice Registers the meta evidence at the arbitrable contact level.
-     * @dev Should be called only by the arbitrable contract.
-     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     */
-    function registerContractMetaEvidence(string calldata _metaEvidence) external override onlyIfInitialized {
-        emit ContractMetaEvidenceRegistered(ICrossChainArbitrable(msg.sender), _metaEvidence);
-
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveContractMetaEvidence.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _metaEvidence);
-        amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
-    }
-
-    /**
-     * @notice Registers the arbitrator extra data at the arbitrable contact level.
-     * @dev Should be called only by the arbitrable contract.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
-     */
-    function registerContractArbitratorExtraData(bytes calldata _arbitratorExtraData)
-        external
-        override
-        onlyIfInitialized
-    {
-        emit ContractArbitratorExtraDataRegistered(ICrossChainArbitrable(msg.sender), _arbitratorExtraData);
-
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveContractArbitratorExtraData.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitratorExtraData);
-        amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
-    }
-
-    /**
      * @notice Registers the meta evidence at the arbitrable item level.
      * @dev Should be called only by the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
