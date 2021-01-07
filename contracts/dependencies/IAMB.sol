@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.7.2;
+pragma solidity ^0.7.6;
 
 interface IAMB {
     function requireToPassMessage(
@@ -11,6 +11,8 @@ interface IAMB {
     function maxGasPerTx() external view returns (uint256);
 
     function messageSender() external view returns (address);
+
+    function messageSourceChainId() external view returns (bytes32);
 
     function messageId() external view returns (bytes32);
 }

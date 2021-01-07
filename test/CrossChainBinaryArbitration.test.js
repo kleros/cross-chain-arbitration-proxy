@@ -1,14 +1,14 @@
-const {ethers} = require("@nomiclabs/buidler");
-const {solidity} = require("ethereum-waffle");
-const {use, expect} = require("chai");
-const {getEmittedEvent} = require("./helpers/events");
-const {latestTime, increaseTime} = require("./helpers/time");
+const { ethers } = require("@nomiclabs/buidler");
+const { solidity } = require("ethereum-waffle");
+const { use, expect } = require("chai");
+const { getEmittedEvent } = require("./helpers/events");
+const { latestTime, increaseTime } = require("./helpers/time");
 const HP = require("./helpers/HomeProxy");
 const FP = require("./helpers/ForeignProxy");
 
 use(solidity);
 
-const {BigNumber} = ethers;
+const { BigNumber } = ethers;
 
 let arbitrator;
 let arbitrable;
@@ -17,14 +17,11 @@ let foreignProxy;
 let amb;
 
 let governor;
-let defendant;
 let plaintiff;
-let crowdfunderDefendant;
+let defendant;
 
-const contractMetaEvidence = "ipfs/X";
-const contractArbitratorExtraData = "0x83";
-const itemMetaEvidence = "ipfs/Y";
-const itemArbitratorExtraData = "0x20";
+const metaEvidence = "ipfs/X";
+const arbitratorExtraData = "0x00";
 const disputeTimeout = 600;
 
 const feeDepositTimeout = 100;
@@ -37,15 +34,18 @@ const arbitrationFee = BigNumber.from(BigInt(1e18));
 
 describe("Cross-Chain Binary Arbitration Proxies", () => {
   beforeEach("Setup contract", async () => {
-    [governor, defendant, plaintiff, crowdfunderDefendant] = await ethers.getSigners();
+    [governor, plaintiff, defendant] = await ethers.getSigners();
 
-    const Arbitrator = await ethers.getContractFactory("EnhancedAppealableArbitrator", governor);
-    arbitrator = await Arbitrator.deploy(
-      String(arbitrationFee),
-      ethers.constants.AddressZero,
-      contractArbitratorExtraData,
-      appealTimeout
-    );
+    // const Arbitrator = await ethers.getContractFactory("MockArbitrator", governor);
+    // arbitrator = await Arbitrator.deploy(
+    //   String(arbitrationFee),
+    //   ethers.constants.AddressZero,
+    //   arbitratorExtraData,
+    //   appealTimeout
+    // );
+
+    const Arbitrator = await ethers.getContractFactory("MockAppealableArbitrator", governor);
+    arbitrator = await Arbitrator.deploy(arbitrationFee, appealTimeout);
 
     await arbitrator.deployed();
     // Make appeals go to the same arbitrator
@@ -67,22 +67,14 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
       loserMultiplier
     );
 
-    const changeHomeProxyTx = await foreignProxy.changeHomeProxy(homeProxy.address);
-    await changeHomeProxyTx.wait();
+    const setHomeProxyTx = await foreignProxy.setHomeProxy(homeProxy.address, "0");
+    await setHomeProxyTx.wait();
 
-    const changeForeignProxyTx = await homeProxy.changeForeignProxy(foreignProxy.address);
-    await changeForeignProxyTx.wait();
-
-    const initializeTx = await homeProxy.initialize();
-    await initializeTx.wait();
+    const setForeignProxyTx = await homeProxy.setForeignProxy(foreignProxy.address, "0");
+    await setForeignProxyTx.wait();
 
     const Arbitrable = await ethers.getContractFactory("MockArbitrable", governor);
-    arbitrable = await Arbitrable.deploy(
-      contractMetaEvidence,
-      homeProxy.address,
-      contractArbitratorExtraData,
-      disputeTimeout
-    );
+    arbitrable = await Arbitrable.deploy(metaEvidence, homeProxy.address, arbitratorExtraData, disputeTimeout);
   });
 
   afterEach("Advance block", async () => {
@@ -90,126 +82,67 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
   });
 
   describe("Handshaking", () => {
-    describe("Contract-level params", () => {
-      it("Should emit the register events for the arbitrable contract on the home proxy after deploy and relay the data to the foreign proxy", async () => {
-        const {txPromise} = await registerContract();
+    it("Should emit the register events for the arbitrable contract on the home proxy after deploy and relay the data to the foreign proxy", async () => {
+      const { txPromise } = await registerForArbitration();
 
-        await expect(txPromise)
-          .to.emit(homeProxy, "ItemMetaEvidenceRegistered")
-          .withArgs(arbitrable.address, "0", contractMetaEvidence);
-        await expect(txPromise)
-          .to.emit(homeProxy, "ItemArbitratorExtraDataRegistered")
-          .withArgs(arbitrable.address, "0", contractArbitratorExtraData);
-        await expect(txPromise)
-          .to.emit(foreignProxy, "ItemMetaEvidenceReceived")
-          .withArgs(arbitrable.address, "0", contractMetaEvidence);
-        await expect(txPromise)
-          .to.emit(foreignProxy, "ItemArbitratorExtraDataReceived")
-          .withArgs(arbitrable.address, "0", contractArbitratorExtraData);
-      });
-
-      it("Should set the dispute params for the contract on the home proxy after deploy and relay the data to the foreign proxy", async () => {
-        await registerContract();
-
-        const actualParams = await foreignProxy.getContractDisputeParams(arbitrable.address);
-
-        expect(actualParams.metaEvidence).to.equal(contractMetaEvidence);
-        expect(actualParams.arbitratorExtraData).to.equal(contractArbitratorExtraData);
-      });
-
-      it("Should not emit the register event for the arbitrable item when it does not have its own dispute params", async () => {
-        await registerContract();
-
-        const {txPromise} = await createItemNoParams({reportGas: true});
-
-        await expect(txPromise).not.to.emit(homeProxy, "ItemMetaEvidenceRegistered");
-        await expect(txPromise).not.to.emit(homeProxy, "ItemArbitratorExtraDataRegistered");
-      });
+      await expect(txPromise)
+        .to.emit(homeProxy, "MetaEvidenceRegistered")
+        .withArgs(arbitrable.address, "0", metaEvidence);
+      await expect(txPromise)
+        .to.emit(homeProxy, "ArbitratorExtraDataRegistered")
+        .withArgs(arbitrable.address, "0", arbitratorExtraData);
+      await expect(txPromise)
+        .to.emit(foreignProxy, "MetaEvidenceReceived")
+        .withArgs(arbitrable.address, "0", metaEvidence);
+      await expect(txPromise)
+        .to.emit(foreignProxy, "ArbitratorExtraDataReceived")
+        .withArgs(arbitrable.address, "0", arbitratorExtraData);
     });
 
-    describe("Item-level params", () => {
-      it("Should emit the register event for the arbitrable item when it has its own dispute params", async () => {
-        const {txPromise, receipt} = await createItem(itemMetaEvidence, itemArbitratorExtraData, {reportGas: true});
-        await expect(txPromise).not.to.be.reverted;
-        const arbitrableItemID = getEmittedEvent("ItemCreated", receipt).args._arbitrableItemID;
+    it("Should set the dispute params for the contract on the home proxy after deploy and relay the data to the foreign proxy", async () => {
+      await registerForArbitration();
 
-        await expect(txPromise)
-          .to.emit(homeProxy, "ItemMetaEvidenceRegistered")
-          .withArgs(arbitrable.address, arbitrableItemID, itemMetaEvidence);
-        await expect(txPromise)
-          .to.emit(homeProxy, "ItemArbitratorExtraDataRegistered")
-          .withArgs(arbitrable.address, arbitrableItemID, itemArbitratorExtraData);
-        await expect(txPromise)
-          .to.emit(foreignProxy, "ItemMetaEvidenceReceived")
-          .withArgs(arbitrable.address, arbitrableItemID, itemMetaEvidence);
-        await expect(txPromise)
-          .to.emit(foreignProxy, "ItemArbitratorExtraDataReceived")
-          .withArgs(arbitrable.address, arbitrableItemID, itemArbitratorExtraData);
-      });
+      const actualParams = await foreignProxy.getDisputeParams(arbitrable.address, 0);
 
-      it("Should register the dispute params for the arbitrable item when it has its own dispute params", async () => {
-        const {receipt} = await createItem(itemMetaEvidence, itemArbitratorExtraData, {reportGas: true});
-        const arbitrableItemID = getEmittedEvent("ItemCreated", receipt).args._arbitrableItemID;
+      expect(actualParams.metaEvidence).to.equal(metaEvidence);
+      expect(actualParams.arbitratorExtraData).to.equal(arbitratorExtraData);
+    });
 
-        const actualParams = await foreignProxy.getItemDisputeParams(arbitrable.address, arbitrableItemID);
+    it("Should not emit the register event for the arbitrable item when it does not have its own dispute params", async () => {
+      await registerForArbitration();
 
-        expect(actualParams.metaEvidence).to.equal(itemMetaEvidence);
-        expect(actualParams.arbitratorExtraData).to.equal(itemArbitratorExtraData);
-      });
+      const { txPromise } = await createItem({ reportGas: true });
 
-      it("Should emit the item disputable event on both home and foreign proxies when disputable is set", async () => {
-        const {receipt} = await createItem(itemMetaEvidence, itemArbitratorExtraData, {reportGas: true});
-        const arbitrableItemID = getEmittedEvent("ItemCreated", receipt).args._arbitrableItemID;
-        const {txPromise} = await setDisputableItem(arbitrableItemID);
-
-        await expect(txPromise).to.emit(homeProxy, "DisputableItem").withArgs(arbitrable.address, arbitrableItemID);
-        await expect(txPromise)
-          .to.emit(foreignProxy, "DisputableItemReceived")
-          .withArgs(arbitrable.address, arbitrableItemID);
-      });
-
-      it("Should set the arbitrable item as disputable on the foreign proxies when disputable is set", async () => {
-        const {receipt} = await createItem(itemMetaEvidence, itemArbitratorExtraData, {reportGas: true});
-        const arbitrableItemID = getEmittedEvent("ItemCreated", receipt).args._arbitrableItemID;
-        await setDisputableItem(arbitrableItemID);
-
-        const disputable = await foreignProxy.disputables(
-          foreignProxy.getArbitrationID(arbitrable.address, arbitrableItemID)
-        );
-
-        expect(disputable).to.be.true;
-      });
+      await expect(txPromise).not.to.emit(homeProxy, "MetaEvidenceRegistered");
+      await expect(txPromise).not.to.emit(homeProxy, "ArbitratorExtraDataRegistered");
     });
   });
 
   describe("Handshaking is not completed", () => {
-    it("Should not allow to request a dispute for an unexisting item", async () => {
-      const {txPromise} = await requestDispute(arbitrable.address, 1234);
+    it("Should not allow to request a dispute for an unregistered contract", async () => {
+      const { txPromise } = await requestDispute(arbitrable.address, 1234);
 
-      await expect(txPromise).to.be.revertedWith("Item not found");
+      await expect(txPromise).to.be.reverted;
     });
 
-    it("Should not allow to request a dispute for a non disputable item", async () => {
-      const {receipt} = await createItem(itemMetaEvidence, itemArbitratorExtraData);
-      const arbitrableItemID = getEmittedEvent("ItemCreated", receipt).args._arbitrableItemID;
+    it("Should not allow to request a dispute for an item whose ID is lower than the first registered", async () => {
+      await registerForArbitration({ id: 1234 });
 
-      const {txPromise} = await requestDispute(arbitrable.address, arbitrableItemID);
+      const { txPromise } = await requestDispute(arbitrable.address, 0);
 
-      await expect(txPromise).to.be.revertedWith("Item is not disputable");
+      await expect(txPromise).to.be.reverted;
     });
   });
 
-  describe.only("Dispute Workflow", () => {
+  describe("Dispute Workflow", () => {
     let arbitrableItemID;
     let arbitrationID;
 
     beforeEach("Perform handshaking", async () => {
-      await registerContract();
-      const {receipt} = await createItemNoParams();
+      await registerForArbitration();
+      const { receipt } = await createItem();
       arbitrableItemID = getEmittedEvent("ItemCreated", receipt).args._arbitrableItemID;
       arbitrationID = await foreignProxy.getArbitrationID(arbitrable.address, arbitrableItemID);
-
-      await setDisputableItem(arbitrableItemID);
     });
 
     describe("Request dispute", () => {
@@ -225,37 +158,35 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
       });
 
       it("Should relay the dispute request to the home proxy", async () => {
-        const {txPromise} = await requestDispute(arbitrable.address, arbitrableItemID);
+        const { txPromise } = await requestDispute(arbitrable.address, arbitrableItemID);
 
-        await expect(txPromise)
-          .to.emit(homeProxy, "DisputeRequest")
-          .withArgs(arbitrable.address, arbitrableItemID, await plaintiff.getAddress());
+        await expect(txPromise).not.to.be.reverted;
+        await expect(txPromise).not.to.emit(homeProxy, "DisputeRejected");
+        await expect(txPromise).to.emit(homeProxy, "DisputeAccepted").withArgs(arbitrable.address, arbitrableItemID);
       });
 
       it("Should notify the arbitrable contract of the dispute request", async () => {
-        const {txPromise} = await requestDispute(arbitrable.address, arbitrableItemID);
+        const { txPromise } = await requestDispute(arbitrable.address, arbitrableItemID);
 
         await expect(txPromise)
-          .to.emit(arbitrable, "DisputeRequest")
+          .to.emit(arbitrable, "ItemDisputeRequest")
           .withArgs(arbitrableItemID, await plaintiff.getAddress());
       });
 
       describe("When the dispute is accepted", () => {
-        it("Should set the status for the arbitrable item on the home chain", async () => {
-          await requestDispute(arbitrable.address, arbitrableItemID);
+        it("Should set the status for the arbitrable item on the home chain and emit the DisputeAccepted event", async () => {
+          const { txPromise } = await requestDispute(arbitrable.address, arbitrableItemID);
 
           const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
 
+          await expect(txPromise).to.emit(homeProxy, "DisputeAccepted").withArgs(arbitrable.address, arbitrableItemID);
           expect(arbitrableItem.status).to.equal(HP.Status.Accepted);
         });
 
         it("Should relay to the foreign proxy that the dispute was accepted", async () => {
           await requestDispute(arbitrable.address, arbitrableItemID);
-          const {txPromise} = await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
+          const { txPromise } = await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
 
-          await expect(txPromise)
-            .to.emit(homeProxy, "DisputeAccepted")
-            .withArgs(arbitrable.address, arbitrableItemID, await defendant.getAddress());
           await expect(txPromise).to.emit(foreignProxy, "DisputeAccepted");
         });
 
@@ -269,99 +200,78 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
           expect(arbitration.acceptedAt).to.equal(await latestTime(), "Invalid acceptedAt");
         });
 
-        it("Should register the plaintiff contribution to his side", async () => {
+        it("Should register the plaintiff deposit", async () => {
           await requestDispute(arbitrable.address, arbitrableItemID);
           await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
 
-          const [_, defendantContrib, plaintiffContrib] = await foreignProxy.getContributions(
-            arbitrationID,
-            await plaintiff.getAddress(),
-            0
-          );
+          const { sumDeposit } = await foreignProxy.arbitrations(arbitrationID);
 
-          expect(defendantContrib).to.equal(0);
-          expect(plaintiffContrib).to.equal(arbitrationFee);
+          expect(sumDeposit).to.equal(arbitrationFee);
         });
       });
 
       describe("When the dispute is rejected", () => {
+        let txPromise;
         beforeEach("Increase time so the item cannot be disputed anymore", async () => {
           await increaseTime(disputeTimeout + 1);
-          await requestDispute(arbitrable.address, arbitrableItemID);
+          ({ txPromise } = await requestDispute(arbitrable.address, arbitrableItemID));
         });
 
         it("Should set the status for the arbitrable item on the home chain", async () => {
           const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
 
+          await expect(txPromise).to.emit(homeProxy, "DisputeRejected").withArgs(arbitrable.address, arbitrableItemID);
           expect(arbitrableItem.status).to.equal(HP.Status.Rejected);
         });
 
         it("Should relay to the foreign proxy the dispute was rejected", async () => {
-          const {txPromise} = await relayDisputeRejected(arbitrable.address, arbitrableItemID);
+          const { txPromise } = await relayDisputeRejected(arbitrable.address, arbitrableItemID);
 
-          await expect(txPromise).to.emit(homeProxy, "DisputeRejected").withArgs(arbitrable.address, arbitrableItemID);
           await expect(txPromise).to.emit(foreignProxy, "DisputeRejected");
         });
 
-        it("Should advance to the Failed state on the foreign proxy", async () => {
+        it("Should reset to the arbitration state on the foreign proxy", async () => {
           await relayDisputeRejected(arbitrable.address, arbitrableItemID);
 
           const arbitration = await foreignProxy.arbitrations(arbitrationID);
 
-          expect(arbitration.status).to.equal(FP.Status.Failed, "Invalid status");
+          expect(arbitration.status).to.equal(FP.Status.None, "Did not reset the status");
+          expect(arbitration.plaintiff).to.equal(ethers.constants.AddressZero, "Did not reset the plaintiff");
+          expect(arbitration.sumDeposit).to.equal(0, "Did not reset the sumDeposit");
         });
 
         it("Should reimburse the plaintiff of the arbitration fee", async () => {
-          const {tx} = await relayDisputeRejected(arbitrable.address, arbitrableItemID);
+          const { tx } = await relayDisputeRejected(arbitrable.address, arbitrableItemID);
 
           await expect(tx).to.changeBalance(plaintiff, arbitrationFee);
         });
       });
     });
 
-    describe("Fund dispute defendant", () => {
+    describe("Pay defendant fee", () => {
       beforeEach("Request and accept the dispute", async () => {
         await requestDispute(arbitrable.address, arbitrableItemID);
         await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
       });
 
       describe("When the defendant pays the arbitration cost within the deadline for deposit", () => {
-        it("Should emit fee related events on the foreign proxy", async () => {
-          const {txPromise} = await fundDisputeDefendant(arbitrationID);
+        it("Should create the dispute on the arbitrator and emit the MetaEvidence, Dispute and DisputeOngoing events", async () => {
+          const { txPromise } = await payDefendantFee(arbitrationID);
 
-          await expect(txPromise)
-            .to.emit(foreignProxy, "FeeContribution")
-            .withArgs(arbitrationID, FP.Party.Defendant, await defendant.getAddress(), arbitrationFee, 0);
-          await expect(txPromise).to.emit(foreignProxy, "FeePaid").withArgs(arbitrationID, FP.Party.Defendant, 0);
-        });
-
-        it("Should register the defendant contribution to his side", async () => {
-          await fundDisputeDefendant(arbitrationID);
-
-          const [_, defendantContrib, plaintiffContrib] = await foreignProxy.getContributions(
-            arbitrationID,
-            await defendant.getAddress(),
-            0
-          );
-
-          expect(defendantContrib).to.equal(arbitrationFee);
-          expect(plaintiffContrib).to.equal(0);
-        });
-
-        it("Should create the dispute on the arbitrator", async () => {
-          const {txPromise} = await fundDisputeDefendant(arbitrationID);
-
+          await expect(txPromise).to.emit(foreignProxy, "MetaEvidence");
+          await expect(txPromise).to.emit(foreignProxy, "Dispute");
+          await expect(txPromise).to.emit(foreignProxy, "DisputeOngoing");
           await expect(txPromise).to.emit(arbitrator, "DisputeCreation");
         });
 
         it("Should notify the home proxy that the dispute was created", async () => {
-          const {txPromise} = await fundDisputeDefendant(arbitrationID);
+          const { txPromise } = await payDefendantFee(arbitrationID);
 
           await expect(txPromise).to.emit(homeProxy, "DisputeCreated");
         });
 
-        it("Should set the arbitrator and dispute ID in the arbitrable item state in the home proxy", async () => {
-          const {receipt} = await fundDisputeDefendant(arbitrationID);
+        it("Should set the arbitrator and dispute ID in the arbitrable item on the home proxy", async () => {
+          const { receipt } = await payDefendantFee(arbitrationID);
           const arbitratorDisputeID = getEmittedEvent("Dispute", receipt).args._disputeID;
 
           const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
@@ -371,13 +281,59 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
         });
       });
 
+      describe("When the defendant pays the arbitration cost within the deadline, but the dispute creation fails", () => {
+        beforeEach("Request and accept the dispute", async () => {
+          await requestDispute(arbitrable.address, arbitrableItemID);
+          await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
+          await deactivateArbitrator();
+        });
+
+        it("Should notify the home proxy that the dispute creation failed", async () => {
+          const { txPromise } = await payDefendantFee(arbitrationID);
+
+          await expect(txPromise)
+            .to.emit(foreignProxy, "DisputeFailed")
+            .withArgs(arbitrationID, arbitrator.address, arbitratorExtraData);
+          await expect(txPromise).to.emit(homeProxy, "DisputeFailed").withArgs(arbitrable.address, arbitrableItemID);
+        });
+
+        it("Should reiburse both the plaintiff and the requester", async () => {
+          const { tx } = await payDefendantFee(arbitrationID);
+
+          // The defendant just submitted the value, so when reimbursed her balance should not change
+          await expect(() => tx).to.changeEtherBalances([plaintiff, defendant], [arbitrationFee, 0]);
+        });
+
+        it("Should reset the arbitration state on the foreign proxy", async () => {
+          await payDefendantFee(arbitrationID);
+
+          const arbitration = await foreignProxy.arbitrations(arbitrationID);
+
+          expect(arbitration.status).to.equal(FP.Status.None);
+          expect(arbitration.plaintiff).to.equal(ethers.constants.AddressZero);
+          expect(arbitration.defendant).to.equal(ethers.constants.AddressZero);
+          expect(arbitration.sumDeposit).to.equal(0);
+        });
+
+        it("Should reset the arbitration state on the home proxy", async () => {
+          await payDefendantFee(arbitrationID);
+
+          const arbitrableItem = await homeProxy.arbitrableItems(arbitrable.address, arbitrableItemID);
+
+          expect(arbitrableItem.status).to.equal(HP.Status.None);
+          expect(arbitrableItem.arbitrator).to.equal(ethers.constants.AddressZero);
+          expect(arbitrableItem.arbitratorDisputeID).to.equal(0);
+          expect(arbitrableItem.ruling).to.equal(0);
+        });
+      });
+
       describe("When the deadline for deposit has passed and the defendant did not pay the arbitration cost", () => {
         beforeEach("Advance time", async () => {
           await increaseTime(feeDepositTimeout + 1);
         });
 
         it("Should rule in favor of the plaintiff", async () => {
-          const {txPromise} = await claimPlaintiffWin(arbitrationID);
+          const { txPromise } = await claimPlaintiffWin(arbitrationID);
 
           const arbitration = await foreignProxy.arbitrations(arbitrationID);
 
@@ -387,7 +343,7 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
         });
 
         it("Should relay the ruling in favor of the plaintiff to the home proxy", async () => {
-          const {txPromise} = await claimPlaintiffWin(arbitrationID);
+          const { txPromise } = await claimPlaintiffWin(arbitrationID);
 
           await expect(txPromise)
             .to.emit(homeProxy, "DisputeRuled")
@@ -395,13 +351,15 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
         });
 
         it("Should rule the arbitrable contract in favor of the plaintiff", async () => {
-          const {txPromise} = await claimPlaintiffWin(arbitrationID);
+          const { txPromise } = await claimPlaintiffWin(arbitrationID);
 
-          await expect(txPromise).to.emit(arbitrable, "DisputeRuled").withArgs(arbitrableItemID, FP.Party.Plaintiff);
+          await expect(txPromise)
+            .to.emit(arbitrable, "ItemDisputeRuled")
+            .withArgs(arbitrableItemID, FP.Party.Plaintiff);
         });
 
         it("Should reimburse the plaintiff of the arbitration fee", async () => {
-          const {tx} = await claimPlaintiffWin(arbitrationID);
+          const { tx } = await claimPlaintiffWin(arbitrationID);
 
           await expect(tx).to.changeBalance(plaintiff, arbitrationFee);
         });
@@ -412,12 +370,12 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
       beforeEach("Request and accept the dispute, pay defendant's side fee", async () => {
         await requestDispute(arbitrable.address, arbitrableItemID);
         await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
-        await fundDisputeDefendant(arbitrationID);
+        await payDefendantFee(arbitrationID);
       });
 
       it("Should accept the arbitrator ruling on the foreign proxy", async () => {
         const expectedRuling = FP.Party.Defendant;
-        const {txPromise} = await giveFinalRuling(arbitrationID, expectedRuling);
+        const { txPromise } = await giveFinalRuling(arbitrationID, expectedRuling);
 
         const arbitration = await foreignProxy.arbitrations(arbitrationID);
 
@@ -428,7 +386,7 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
 
       it("Should relay the arbitrator ruling to the home proxy", async () => {
         const expectedRuling = FP.Party.Defendant;
-        const {txPromise} = await giveFinalRuling(arbitrationID, expectedRuling);
+        const { txPromise } = await giveFinalRuling(arbitrationID, expectedRuling);
 
         await expect(txPromise)
           .to.emit(homeProxy, "DisputeRuled")
@@ -447,140 +405,60 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
 
       it("Should rule the arbitrable contract with the ruling from the arbitrator", async () => {
         const expectedRuling = FP.Party.Defendant;
-        const {txPromise} = await giveFinalRuling(arbitrationID, expectedRuling);
+        const { txPromise } = await giveFinalRuling(arbitrationID, expectedRuling);
 
-        await expect(txPromise).to.emit(arbitrable, "DisputeRuled").withArgs(arbitrableItemID, expectedRuling);
+        await expect(txPromise).to.emit(arbitrable, "ItemDisputeRuled").withArgs(arbitrableItemID, expectedRuling);
       });
 
-      it("Should allow the winning party to withdraw the respective fees and rewards", async () => {
+      it("Should reimburse the winning party of the arbitration fee", async () => {
         const expectedRuling = FP.Party.Defendant;
-        await giveFinalRuling(arbitrationID, expectedRuling);
+        const { tx } = await giveFinalRuling(arbitrationID, expectedRuling);
 
-        const {tx} = await batchWithdrawFeesAndRewards(arbitrationID, defendant);
         await expect(tx).to.changeBalance(defendant, arbitrationFee);
       });
 
-      it("Should not have any withdrawable amount for the losing party", async () => {
+      it("Should not reimburse the losing party", async () => {
         const expectedRuling = FP.Party.Defendant;
-        await giveFinalRuling(arbitrationID, expectedRuling);
+        const { tx } = await giveFinalRuling(arbitrationID, expectedRuling);
 
-        const amount = await foreignProxy.getTotalWithdrawableAmount(arbitrationID, await plaintiff.getAddress());
-
-        expect(amount).to.equal(0);
-      });
-    });
-
-    describe("Crowdfund dispute defendant", () => {
-      beforeEach("Request and accept the dispute", async () => {
-        await requestDispute(arbitrable.address, arbitrableItemID);
-        await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
+        await expect(tx).to.changeBalance(plaintiff, 0);
       });
 
-      describe("When the crowdfunding succeeds to pay for the full arbitration cost", () => {
-        let txPromise;
-        const contribution = arbitrationFee.div(BigNumber.from(2));
+      it("Should reimburse both the plaintiff and the defendant half of the arbitration cost when the arbitrator refuses to rule", async () => {
+        const expectedRuling = FP.Party.None;
+        const { tx } = await giveFinalRuling(arbitrationID, expectedRuling);
 
-        beforeEach("Request and accept the dispute", async () => {
-          await fundDisputeDefendant(arbitrationID, contribution, {signer: defendant});
-          ({txPromise} = await fundDisputeDefendant(arbitrationID, contribution, {signer: crowdfunderDefendant}));
-        });
-
-        it("Should register all contributions to the defendant's side", async () => {
-          const fromDefendant = await foreignProxy.getContributions(arbitrationID, await defendant.getAddress(), 0);
-
-          const fromCrowdfunder = await foreignProxy.getContributions(
-            arbitrationID,
-            await crowdfunderDefendant.getAddress(),
-            0
-          );
-
-          expect(fromDefendant[FP.Party.Defendant]).to.equal(contribution);
-          expect(fromCrowdfunder[FP.Party.Defendant]).to.equal(contribution);
-        });
-
-        it("Should create the dispute on the arbitrator", async () => {
-          await expect(txPromise).to.emit(arbitrator, "DisputeCreation");
-        });
-
-        it("Should notify the home proxy that the dispute was created", async () => {
-          await expect(txPromise).to.emit(homeProxy, "DisputeCreated");
-        });
-      });
-
-      describe("When the arbitrator rules in favor of the crowdfunded side", () => {
-        const expectedRuling = FP.Party.Defendant;
-        const contribution = arbitrationFee.div(BigNumber.from(2));
-
-        beforeEach(
-          "Request and accept the dispute, crowdfund defentant's side and rule in favor of the defendant",
-          async () => {
-            await fundDisputeDefendant(arbitrationID, contribution, {signer: defendant});
-            await fundDisputeDefendant(arbitrationID, contribution, {signer: crowdfunderDefendant});
-            await giveFinalRuling(arbitrationID, expectedRuling);
-          }
-        );
-
-        it("Should allow each contributor to the winning party to withdraw fees and rewards proportional to their contribution", async () => {
-          const defendantResult = await batchWithdrawFeesAndRewards(arbitrationID, defendant);
-          const crowdfunderResult = await batchWithdrawFeesAndRewards(arbitrationID, crowdfunderDefendant);
-
-          await expect(defendantResult.tx).to.changeBalance(defendant, contribution);
-          await expect(crowdfunderResult.tx).to.changeBalance(crowdfunderDefendant, contribution);
-        });
-
-        it("Should not have any withdrawable amount for the losing party", async () => {
-          const amount = await foreignProxy.getTotalWithdrawableAmount(arbitrationID, await plaintiff.getAddress());
-
-          expect(amount).to.equal(0);
-        });
-      });
-
-      describe("When the crowdfunding fails to pay for the full arbitration cost before the deadline", () => {
-        const incompleteContribution = arbitrationFee.div(BigNumber.from(4));
-
-        beforeEach(
-          "Request and accept the dispute, partially crowdfund defentant's side, avance time and claim plaintiff win",
-          async () => {
-            await fundDisputeDefendant(arbitrationID, incompleteContribution, {signer: defendant});
-            await fundDisputeDefendant(arbitrationID, incompleteContribution, {signer: crowdfunderDefendant});
-            await increaseTime(feeDepositTimeout + 1);
-            await claimPlaintiffWin(arbitrationID);
-          }
-        );
-
-        it("Should allow contributors of the incomplete crowdfunding to withdraw their respective contributions", async () => {
-          const defendantResult = await batchWithdrawFeesAndRewards(arbitrationID, defendant);
-          const crowdfunderResult = await batchWithdrawFeesAndRewards(arbitrationID, crowdfunderDefendant);
-
-          await expect(defendantResult.tx).to.changeBalance(defendant, incompleteContribution);
-          await expect(crowdfunderResult.tx).to.changeBalance(crowdfunderDefendant, incompleteContribution);
-        });
+        const halfArbitrationFee = arbitrationFee.div(2);
+        await expect(tx).to.changeBalances([plaintiff, defendant], [halfArbitrationFee, halfArbitrationFee]);
       });
     });
 
     describe("Appeal dispute", () => {
-      const currentRound = 1;
+      const currentRound = 0;
       const firstRuling = FP.Party.Plaintiff;
       const finalRuling = FP.Party.Defendant;
 
       beforeEach("Request and accept the dispute, fund defendant's side and give appealable ruling", async () => {
         await requestDispute(arbitrable.address, arbitrableItemID);
         await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
-        await fundDisputeDefendant(arbitrationID);
+        await payDefendantFee(arbitrationID);
         await giveAppealableRuling(arbitrationID, firstRuling);
       });
 
       describe("When both parties pay the full appeal fee", () => {
+        let appealFee;
         let defendantFee;
         let plaintiffFee;
         let txPromise;
 
         beforeEach("Pay both appeal fee", async () => {
+          const { arbitratorDisputeID } = await foreignProxy.arbitrations(arbitrationID);
+          appealFee = await arbitrator.appealCost(arbitratorDisputeID, arbitratorExtraData);
           defendantFee = await foreignProxy.getAppealFee(arbitrationID, FP.Party.Defendant);
           plaintiffFee = await foreignProxy.getAppealFee(arbitrationID, FP.Party.Plaintiff);
 
           await fundAppeal(arbitrationID, FP.Party.Defendant, defendantFee);
-          ({txPromise} = await fundAppeal(arbitrationID, FP.Party.Plaintiff, plaintiffFee));
+          ({ txPromise } = await fundAppeal(arbitrationID, FP.Party.Plaintiff, plaintiffFee));
         });
 
         it("Should issue an appeal on the arbitrator", async () => {
@@ -606,13 +484,11 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
         it("Should allow the winner of the final ruling to withdraw fees and rewards for all rounds", async () => {
           await giveFinalRuling(arbitrationID, finalRuling);
 
-          const {tx} = await batchWithdrawFeesAndRewards(arbitrationID, defendant);
+          const { tx } = await batchWithdrawFeesAndRewards(arbitrationID, defendant);
 
-          const disputeFeeRewards = arbitrationFee;
-          const appealFeeRewards = defendantFee.add(plaintiffFee).sub(arbitrationFee);
-          const expectedBalanceChange = disputeFeeRewards.add(appealFeeRewards);
+          const appealFeeRewards = defendantFee.add(plaintiffFee).sub(appealFee);
 
-          await expect(tx).to.changeBalance(defendant, expectedBalanceChange);
+          await expect(() => tx).to.changeBalance(defendant, appealFeeRewards);
         });
       });
 
@@ -627,7 +503,7 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
         beforeEach("Setup ruling to be reverted", async () => {
           await requestDispute(arbitrable.address, arbitrableItemID);
           await relayDisputeAccepted(arbitrable.address, arbitrableItemID);
-          await fundDisputeDefendant(arbitrationID);
+          await payDefendantFee(arbitrationID);
           await giveAppealableRuling(arbitrationID, firstRuling);
 
           defendantFee = await foreignProxy.getAppealFee(arbitrationID, FP.Party.Defendant);
@@ -637,7 +513,7 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
           plaintiffContribution = plaintiffFee.div(BigNumber.from(2));
           await fundAppeal(arbitrationID, FP.Party.Plaintiff, plaintiffContribution);
 
-          ({txPromise} = await giveFinalRuling(arbitrationID, finalRuling));
+          ({ txPromise } = await giveFinalRuling(arbitrationID, finalRuling));
         });
 
         it("Should consider the party which fully paid the winner of the arbitration even when the arbitrator rules differently", async () => {
@@ -649,14 +525,14 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
         });
 
         it("Should allow winner to withdraw their contributions", async () => {
-          const {tx} = await batchWithdrawFeesAndRewards(arbitrationID, defendant);
-          const expectedBalanceChange = arbitrationFee.add(defendantFee);
+          const { tx } = await batchWithdrawFeesAndRewards(arbitrationID, defendant);
+          const expectedBalanceChange = defendantFee;
 
           await expect(tx).to.changeBalance(defendant, expectedBalanceChange);
         });
 
         it("Should allow the contributors to the incomplete crowddfunding to withdraw their respective contributions", async () => {
-          const {tx} = await batchWithdrawFeesAndRewards(arbitrationID, plaintiff);
+          const { tx } = await batchWithdrawFeesAndRewards(arbitrationID, plaintiff);
 
           await expect(tx).to.changeBalance(plaintiff, plaintiffContribution);
         });
@@ -664,56 +540,42 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
     });
   });
 
-  function registerContract({signer = governor} = {}) {
-    return submitTransaction(arbitrable.connect(signer).registerContract());
+  async function registerForArbitration({ id = 0, signer = governor } = {}) {
+    return await submitTransaction(arbitrable.connect(signer).registerForArbitration(id));
   }
 
-  async function createItemNoParams({signer = defendant, reportGas = false} = {}) {
+  async function createItem({ signer = defendant, reportGas = false } = {}) {
     if (reportGas) {
-      console.log("\tGas usage -> createItem():", Number(await arbitrable.estimateGas["createItem()"]()));
+      console.info("\tGas usage -> createItem():", Number(await arbitrable.estimateGas["createItem()"]()));
     }
-    return submitTransaction(arbitrable.connect(signer)["createItem()"]());
+    return await submitTransaction(arbitrable.connect(signer).createItem());
   }
 
-  async function createItem(metaEvidence, arbitratorExtraData, {signer = defendant, reportGas = false} = {}) {
-    if (reportGas) {
-      console.log(
-        "\tGas usage: createItem(string,bytes):",
-        Number(await arbitrable.estimateGas["createItem(string,bytes)"](metaEvidence, arbitratorExtraData))
-      );
-    }
-    return submitTransaction(arbitrable.connect(signer)["createItem(string,bytes)"](metaEvidence, arbitratorExtraData));
-  }
-
-  function setDisputableItem(arbitrableItemID, {signer = defendant} = {}) {
-    return submitTransaction(arbitrable.connect(signer).setDisputableItem(arbitrableItemID));
-  }
-
-  function requestDispute(arbitrableAddress, arbitrableItemID, {signer = plaintiff} = {}) {
-    return submitTransaction(
-      foreignProxy.connect(signer).requestDispute(arbitrableAddress, arbitrableItemID, {value: arbitrationFee})
+  async function requestDispute(arbitrableAddress, arbitrableItemID, { signer = plaintiff } = {}) {
+    return await submitTransaction(
+      foreignProxy.connect(signer).requestDispute(arbitrableAddress, arbitrableItemID, { value: arbitrationFee })
     );
   }
 
-  function relayDisputeAccepted(arbitrableAddress, arbitrableItemID, {signer = governor} = {}) {
-    return submitTransaction(homeProxy.connect(signer).relayDisputeAccepted(arbitrableAddress, arbitrableItemID));
+  async function relayDisputeAccepted(arbitrableAddress, arbitrableItemID, { signer = governor } = {}) {
+    return await submitTransaction(homeProxy.connect(signer).relayDisputeAccepted(arbitrableAddress, arbitrableItemID));
   }
 
-  function relayDisputeRejected(arbitrableAddress, arbitrableItemID, {signer = governor} = {}) {
-    return submitTransaction(homeProxy.connect(signer).relayDisputeRejected(arbitrableAddress, arbitrableItemID));
+  async function relayDisputeRejected(arbitrableAddress, arbitrableItemID, { signer = governor } = {}) {
+    return await submitTransaction(homeProxy.connect(signer).relayDisputeRejected(arbitrableAddress, arbitrableItemID));
   }
 
-  function fundDisputeDefendant(arbitrationID, amount = arbitrationFee, {signer = defendant} = {}) {
-    return submitTransaction(foreignProxy.connect(signer).fundDisputeDefendant(arbitrationID, {value: amount}));
+  async function payDefendantFee(arbitrationID, amount = arbitrationFee, { signer = defendant } = {}) {
+    return await submitTransaction(foreignProxy.connect(signer).payDefendantFee(arbitrationID, { value: amount }));
   }
 
-  function claimPlaintiffWin(arbitrationID, {signer = governor} = {}) {
-    return submitTransaction(foreignProxy.connect(signer).claimPlaintiffWin(arbitrationID));
+  async function claimPlaintiffWin(arbitrationID, { signer = governor } = {}) {
+    return await submitTransaction(foreignProxy.connect(signer).claimPlaintiffWin(arbitrationID));
   }
 
   async function giveAppealableRuling(arbitrationID, ruling) {
-    const {arbitratorDisputeID} = await foreignProxy.arbitrations(arbitrationID);
-    return submitTransaction(arbitrator.giveRuling(arbitratorDisputeID, ruling));
+    const { arbitratorDisputeID } = await foreignProxy.arbitrations(arbitrationID);
+    return await submitTransaction(arbitrator.giveRuling(arbitratorDisputeID, ruling));
   }
 
   async function fundAppeal(
@@ -723,17 +585,17 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
     signer = party === FP.Party.Defendant ? defendant : plaintiff
   ) {
     amount = amount || (await arbitrator.getAppealFee(arbitrationID, party));
-    return submitTransaction(foreignProxy.connect(signer).fundAppeal(arbitrationID, party, {value: amount}));
+    return await submitTransaction(foreignProxy.connect(signer).fundAppeal(arbitrationID, party, { value: amount }));
   }
 
   async function giveFinalRuling(arbitrationID, ruling) {
-    const {arbitratorDisputeID} = await foreignProxy.arbitrations(arbitrationID);
+    const { arbitratorDisputeID } = await foreignProxy.arbitrations(arbitrationID);
     const appealDisputeID = await arbitrator.getAppealDisputeID(arbitratorDisputeID);
     await submitTransaction(arbitrator.giveRuling(appealDisputeID, ruling));
 
-    await increaseTime(appealTimeout + 1);
+    await increaseTime(appealTimeout + 1000);
 
-    return submitTransaction(arbitrator.giveRuling(appealDisputeID, ruling));
+    return await submitTransaction(arbitrator.giveRuling(appealDisputeID, ruling));
   }
 
   async function batchWithdrawFeesAndRewards(
@@ -741,13 +603,17 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
     beneficiary,
     cursor = 0,
     count = 0,
-    {signer = governor} = {}
+    { signer = governor } = {}
   ) {
-    return submitTransaction(
+    return await submitTransaction(
       foreignProxy
         .connect(signer)
         .batchWithdrawFeesAndRewards(arbitrationID, await beneficiary.getAddress(), cursor, count)
     );
+  }
+
+  async function deactivateArbitrator() {
+    return await submitTransaction(arbitrator.deactivate());
   }
 
   async function submitTransaction(txPromise) {
@@ -755,9 +621,9 @@ describe("Cross-Chain Binary Arbitration Proxies", () => {
       const tx = await txPromise;
       const receipt = await tx.wait();
 
-      return {txPromise, tx, receipt};
+      return { txPromise, tx, receipt };
     } catch (err) {
-      return {txPromise};
+      return { txPromise };
     }
   }
 });

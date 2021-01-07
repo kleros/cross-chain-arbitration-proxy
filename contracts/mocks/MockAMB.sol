@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.7.2;
+pragma solidity ^0.7.6;
 
 import "../dependencies/IAMB.sol";
 
@@ -22,7 +22,7 @@ contract MockAMB is IAMB {
         currentMessageSender = msg.sender;
 
         // solhint-disable-next-line avoid-low-level-calls
-        (bool success, ) = _contract.call(_data);
+        (bool success, ) = _contract.call{gas: _gas}(_data);
 
         require(success, "Failed to call contract");
 
@@ -31,11 +31,15 @@ contract MockAMB is IAMB {
     }
 
     function maxGasPerTx() external override view returns (uint256) {
-        return 8000000;
+        return 80000000;
     }
 
     function messageSender() external override view returns (address) {
         return currentMessageSender;
+    }
+
+    function messageSourceChainId() external override view returns (bytes32) {
+        return bytes32(0);
     }
 
     function messageId() external override view returns (bytes32) {

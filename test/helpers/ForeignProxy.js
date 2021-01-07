@@ -10,6 +10,5 @@ module.exports = {
     DepositPending: 2,
     Ongoing: 3,
     Ruled: 4,
-    Failed: 5,
   },
 };
