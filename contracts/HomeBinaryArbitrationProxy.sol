@@ -7,11 +7,12 @@
  *
  * SPDX-License-Identifier: MIT
  */
-pragma solidity ^0.7.2;
+pragma solidity ^0.7.6;
 
 import "@kleros/erc-792/contracts/erc-1497/IEvidence.sol";
 import "./dependencies/IAMB.sol";
 import "./CrossChainBinaryArbitration.sol";
+// import "@nomiclabs/buidler/console.sol";
 
 contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     /**
@@ -45,16 +46,11 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
         uint256 ruling;
     }
 
-    event Initialized();
-
     /// @dev Maps an arbitrable contract and and arbitrable item ID to a status
     mapping(ICrossChainArbitrable => mapping(uint256 => ArbitrableItem)) public arbitrableItems;
 
     /// @dev The contract governor. TRUSTED.
     address public governor = msg.sender;
-
-    /// @dev Whether the contract has been properly initialized or not.
-    bool public initialized;
 
     /// @dev ArbitraryMessageBridge contract address. TRUSTED.
     IAMB public amb;
@@ -62,23 +58,23 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     /// @dev Address of the counter-party proxy on the Foreign Chain. TRUSTED.
     address public foreignProxy;
 
+    /// @dev The chain ID where the foreign proxy is deployed.
+    uint256 public foreignChainId;
+
     modifier onlyGovernor() {
         require(msg.sender == governor, "Only governor allowed");
         _;
     }
 
-    modifier onlyAmb() {
-        require(msg.sender == address(amb), "Only AMB allowed");
-        _;
-    }
-
     modifier onlyForeignProxy() {
+        require(msg.sender == address(amb), "Only AMB allowed");
+        require(amb.messageSourceChainId() == bytes32(foreignChainId), "Only foreign chain allowed");
         require(amb.messageSender() == foreignProxy, "Only foreign proxy allowed");
         _;
     }
 
     modifier onlyIfInitialized() {
-        require(initialized, "Not initialized yet");
+        require(foreignProxy != address(0), "Not initialized yet");
         _;
     }
 
@@ -87,21 +83,6 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
      */
     constructor(IAMB _amb) {
         amb = _amb;
-    }
-
-    /**
-     * @dev Initializes the contract so it can start receiving arbitration requests.
-     * @notice This function can only be called once, after `foreignProxy` has already been set for the first time.
-     * Since there is a circular dependency between `ForeignBinaryArbitrationProxy` and `HomeBinaryArbitrationProxy`,
-     * it is not possible to require the home proxy to be a constructor param.
-     */
-    function initialize() external onlyGovernor {
-        require(!initialized, "Proxy already initialized");
-        require(foreignProxy != address(0), "Foreign proxy not set");
-
-        initialized = true;
-
-        emit Initialized();
     }
 
     /**
@@ -123,64 +104,48 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     /**
      * @notice Sets the address of the arbitration proxy on the Foreign Chain.
      * @param _foreignProxy The address of the proxy.
+     * @param _foreignChainId The ID of the chain where the foreign proxy is deployed.
      */
-    function changeForeignProxy(address _foreignProxy) external onlyGovernor {
+    function setForeignProxy(address _foreignProxy, uint256 _foreignChainId) external onlyGovernor {
+        require(foreignProxy == address(0), "Foreign proxy already set");
+
         foreignProxy = _foreignProxy;
+        foreignChainId = _foreignChainId;
     }
 
     /**
-     * @notice Registers the dispute params at arbitrable item level.
+     * @notice Registers the meta evidence at the arbitrable item level.
      * @dev Should be called only by the arbitrable contract.
+     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
      * @param _metaEvidence The MetaEvicence related to the arbitrable item.
-     * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function registerArbitrableContract(string calldata _metaEvidence, bytes calldata _arbitratorExtraData)
+    function registerMetaEvidence(uint256 _arbitrableItemID, string calldata _metaEvidence)
         external
         override
         onlyIfInitialized
     {
-        emit ContractRegistered(ICrossChainArbitrable(msg.sender), _metaEvidence, _arbitratorExtraData);
+        emit MetaEvidenceRegistered(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _metaEvidence);
 
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableContract.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _metaEvidence, _arbitratorExtraData);
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveMetaEvidence.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitrableItemID, _metaEvidence);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 
     /**
-     * @notice Registers the dispute params at arbitrable contract level.
+     * @notice Registers the arbitrator extra data at the arbitrable item level.
      * @dev Should be called only by the arbitrable contract.
      * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     * @param _metaEvidence The MetaEvicence related to the arbitrable item.
      * @param _arbitratorExtraData The extra data for the arbitrator.
      */
-    function registerArbitrableItem(
-        uint256 _arbitrableItemID,
-        string calldata _metaEvidence,
-        bytes calldata _arbitratorExtraData
-    ) external override onlyIfInitialized {
-        emit ItemRegistered(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _metaEvidence, _arbitratorExtraData);
+    function registerArbitratorExtraData(uint256 _arbitrableItemID, bytes calldata _arbitratorExtraData)
+        external
+        override
+        onlyIfInitialized
+    {
+        emit ArbitratorExtraDataRegistered(ICrossChainArbitrable(msg.sender), _arbitrableItemID, _arbitratorExtraData);
 
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitrableItem.selector;
-        bytes memory data = abi.encodeWithSelector(
-            methodSelector,
-            msg.sender,
-            _arbitrableItemID,
-            _metaEvidence,
-            _arbitratorExtraData
-        );
-        amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
-    }
-
-    /**
-     * @notice Sets a given arbitrable item as disputable.
-     * @dev Should be called only by the arbitrable contract.
-     * @param _arbitrableItemID The ID of the arbitrable item on the arbitrable contract.
-     */
-    function setDisputableItem(uint256 _arbitrableItemID) external override onlyIfInitialized {
-        emit DisputableItem(ICrossChainArbitrable(msg.sender), _arbitrableItemID);
-
-        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveDisputableItem.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitrableItemID);
+        bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveArbitratorExtraData.selector;
+        bytes memory data = abi.encodeWithSelector(methodSelector, msg.sender, _arbitrableItemID, _arbitratorExtraData);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 
@@ -195,19 +160,19 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
         ICrossChainArbitrable _arbitrable,
         uint256 _arbitrableItemID,
         address _plaintiff
-    ) external override onlyAmb onlyForeignProxy {
+    ) external override onlyForeignProxy {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
         require(arbitrableItem.status == Status.None, "Dispute request already exists");
 
-        if (_arbitrable.isDisputable(_arbitrableItemID)) {
+        try _arbitrable.notifyDisputeRequest(_arbitrableItemID, _plaintiff) {
             arbitrableItem.status = Status.Accepted;
-            _arbitrable.notifyDisputeRequest(_arbitrableItemID, _plaintiff);
-        } else {
+            emit DisputeAccepted(_arbitrable, _arbitrableItemID);
+        } catch (bytes memory reason) {
+            // console.logBytes(reason);
             arbitrableItem.status = Status.Rejected;
+            emit DisputeRejected(_arbitrable, _arbitrableItemID);
         }
-
-        emit DisputeRequest(_arbitrable, _arbitrableItemID, _plaintiff);
     }
 
     /**
@@ -222,12 +187,8 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
 
         require(arbitrableItem.status == Status.Accepted, "Dispute is not accepted");
 
-        address defendant = _arbitrable.getDefendant(_arbitrableItemID);
-
-        emit DisputeAccepted(_arbitrable, _arbitrableItemID, defendant);
-
         bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveDisputeAccepted.selector;
-        bytes memory data = abi.encodeWithSelector(methodSelector, address(_arbitrable), _arbitrableItemID, defendant);
+        bytes memory data = abi.encodeWithSelector(methodSelector, address(_arbitrable), _arbitrableItemID);
         amb.requireToPassMessage(foreignProxy, data, amb.maxGasPerTx());
     }
 
@@ -246,9 +207,7 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
 
         require(arbitrableItem.status == Status.Rejected, "Dispute is not rejected");
 
-        delete arbitrableItems[_arbitrable][_arbitrableItemID];
-
-        emit DisputeRejected(_arbitrable, _arbitrableItemID);
+        delete arbitrableItems[_arbitrable][_arbitrableItemID].status;
 
         bytes4 methodSelector = IForeignBinaryArbitrationProxy(0).receiveDisputeRejected.selector;
         bytes memory data = abi.encodeWithSelector(methodSelector, address(_arbitrable), _arbitrableItemID);
@@ -268,7 +227,7 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
         uint256 _arbitrableItemID,
         address _arbitrator,
         uint256 _arbitratorDisputeID
-    ) external override onlyAmb onlyForeignProxy {
+    ) external override onlyForeignProxy {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
         require(arbitrableItem.status == Status.Accepted, "Dispute is not accepted");
@@ -288,14 +247,13 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     function receiveDisputeFailed(ICrossChainArbitrable _arbitrable, uint256 _arbitrableItemID)
         external
         override
-        onlyAmb
         onlyForeignProxy
     {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
         require(arbitrableItem.status == Status.Accepted, "Dispute is not accepted");
 
-        delete arbitrableItems[_arbitrable][_arbitrableItemID];
+        delete arbitrableItems[_arbitrable][_arbitrableItemID].status;
         _arbitrable.cancelDispute(_arbitrableItemID);
 
         emit DisputeFailed(_arbitrable, _arbitrableItemID);
@@ -312,7 +270,7 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
         ICrossChainArbitrable _arbitrable,
         uint256 _arbitrableItemID,
         uint256 _ruling
-    ) external override onlyAmb onlyForeignProxy {
+    ) external override onlyForeignProxy {
         ArbitrableItem storage arbitrableItem = arbitrableItems[_arbitrable][_arbitrableItemID];
 
         // Allow receiving ruling if the dispute was accepted but not created.
