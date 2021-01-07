@@ -12,7 +12,6 @@ pragma solidity ^0.7.6;
 import "@kleros/erc-792/contracts/erc-1497/IEvidence.sol";
 import "./dependencies/IAMB.sol";
 import "./CrossChainBinaryArbitration.sol";
-// import "@nomiclabs/buidler/console.sol";
 
 contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
     /**
@@ -169,7 +168,6 @@ contract HomeBinaryArbitrationProxy is IHomeBinaryArbitrationProxy {
             arbitrableItem.status = Status.Accepted;
             emit DisputeAccepted(_arbitrable, _arbitrableItemID);
         } catch (bytes memory reason) {
-            // console.logBytes(reason);
             arbitrableItem.status = Status.Rejected;
             emit DisputeRejected(_arbitrable, _arbitrableItemID);
         }
